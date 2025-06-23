@@ -18,8 +18,19 @@ The purpose of this module is to provide fast and convenient objects and methods
 
 - Each widget or node contains fixed attributes (example: name) and dynamic ones (interpreted at runtime). A hashmap is used for indexing dynamically added attributes (wip).
 
+
+## Next steps
+
+This code should be callable from Python with the help of either [`nanobind`](https://nanobind.readthedocs.io) or `pybind11` (wip).
+
 ## Glossary
 
 - Node represents a vertex of the topics graph. The node contains a tree of widgets.
 
 - Hyperlink is essentially an edge of the graph, but it comes from a widget to a node. Hyperlinks should be bidirectional.
+
+
+## Useful links
+
+- `cppreference` is essential
+- Different ways of implementing DOM: https://simdjson.org/api/0.6.0/md_doc_ondemand.html
