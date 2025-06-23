@@ -14,6 +14,8 @@ An informal codestyle goes here
 
 - Avoid including new libraries if you can; the less dependencies we have the better.
 
+- Please use doxygen-style docstrings.
+
 ## Styling
 
 I prefer not to break someone's way of writing code, but if the code is hard to read, I may ask you to change the styling.
