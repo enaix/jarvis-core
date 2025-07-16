@@ -13,11 +13,12 @@ endif()
 
 file(GLOB_RECURSE COMMON_FILES lib/*.h lib/*.cpp)
 
-add_library(common STATIC ${COMMON_FILES})
-target_include_directories(common PUBLIC lib) # Include common headers
+add_library(common INTERFACE ${COMMON_FILES})
+target_include_directories(common INTERFACE lib) # Include common headers
 set_property(TARGET common PROPERTY LINKER_LANGUAGE CXX)
 
 
 # Subdirectories
 
+include_directories(lib)
 add_subdirectory(tests build/tests/)
