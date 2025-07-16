@@ -20,6 +20,8 @@ class Hyperlink; // forward-decl
 // Since sizeof(std::string) is 32, we can efficiently store 8*4 bytes
 template<class TStr>
 using AttrVariant = std::variant<std::array<std::int64_t, 4>, std::array<double, 4>, TStr, std::vector<std::int64_t>, std::vector<double>>;
+// Note: do we always need 64 bit int/float values?
+
 
 
 /**
@@ -66,11 +68,11 @@ public:
     /**
      * @brief Return the stored string
      */
-    TStr& str() { return _value; }
+    TStr& str() { return _value; } // Do we need to
 
     // Create const versions of these methods
 
-    // Add explicit functions to fetch
+    // Add explicit functions to fetch (i64, ui64, f64, i64(i), ...)
 
 protected:
     /**
@@ -109,7 +111,10 @@ class Widget
 {
 protected:
     AttrValue<TStr> _name;
+    // std::vector<Widget<TStr>> _widgets; // children
     // ...
+
+    // We need to store a hashmap of attributes
 
 public:
     Widget() {}
@@ -117,11 +122,14 @@ public:
 
 
 template<class TStr>
-class Node
+class Node // aka Topic
 {
 protected:
     AttrValue<TStr> _name;
+    // Widget<TStr> _root;
     // ...
+
+    // Should also contain a hashmap of attributes
 
 public:
     Node() {}
