@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -11,9 +12,8 @@
 
 namespace jsc {
 
-namespace detail {
-template <class T> using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
-}
+template <class T>
+using decay_t = std::decay_t<T>;
 
 template <class TStr = std::string>
 using AttrVariant = std::variant<
@@ -29,141 +29,196 @@ public:
     using variant_type = AttrVariant<TStr>;
 
     AttrValue() = default;
+    AttrValue(std::initializer_list<std::int64_t> il) { _v = to_array(il); }
+    AttrValue(std::initializer_list<double> il) { _v = to_array(il); }
 
-    template <class TVal,
-              class = std::enable_if_t<!std::is_same_v<detail::remove_cvref_t<TVal>, AttrValue>>>
+    template <class TVal, class = std::enable_if_t<!std::is_same_v<decay_t<TVal>, AttrValue>>>
     explicit AttrValue(TVal &&v) { init(std::forward<TVal>(v)); }
 
-    AttrValue(const AttrValue &) = default;
-    AttrValue(AttrValue &&) noexcept = default;
-    AttrValue &operator=(const AttrValue &) = default;
-    AttrValue &operator=(AttrValue &&) noexcept = default;
-
-    template <class T>       T &get()       { return std::get<T>(_v); }
+    template <class T> T &get() { return std::get<T>(_v); }
     template <class T> const T &get() const { return std::get<T>(_v); }
 
-    template <class T>       T &at(std::size_t i);
-    template <class T> const T &at(std::size_t i) const { return const_cast<AttrValue*>(this)->at<T>(i); }
+    int64_t  &i64() { return at_i64(0); }
+    uint64_t &ui64() { return reinterpret_cast<uint64_t&>(at_i64(0)); }
+    double   &f64() { return at_f64(0); }
 
-    TStr       &str()       { return std::get<TStr>(_v); }
+    int64_t  &at_i64 (std::size_t i);
+    uint64_t &at_ui64(std::size_t i)    { return reinterpret_cast<uint64_t&>(at_i64(i)); }
+    double   &at_f64 (std::size_t i);
+
+    const int64_t  &at_i64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_i64(i); }
+    const uint64_t &at_ui64(std::size_t i) const { return reinterpret_cast<const uint64_t&>(at_i64(i)); }
+    const double   &at_f64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_f64(i); }
+
+    bool is_str() const { return std::holds_alternative<TStr>(_v); }
+    bool is_vec_i64() const { return std::holds_alternative<std::array<std::int64_t,4>>(_v) || std::holds_alternative<std::vector<std::int64_t>>(_v); }
+    bool is_vec_f64() const { return std::holds_alternative<std::array<double,4>>(_v) || std::holds_alternative<std::vector<double>>(_v); }
+
+    TStr &str() { return std::get<TStr>(_v); }
     const TStr &str() const { return std::get<TStr>(_v); }
 
-    bool is_string()  const { return std::holds_alternative<TStr>(_v); }
-    bool is_int_arr() const { return std::holds_alternative<std::array<std::int64_t,4>>(_v); }
-    bool is_dbl_arr() const { return std::holds_alternative<std::array<double,4>>(_v); }
+    void push_i64(int64_t v);
+    void push_f64(double  v);
+    bool pop_i64(int64_t &out);
+    bool pop_f64(double  &out);
 
-private:
+protected:
     variant_type _v{};
 
-    template <class TVal>
-    void init(TVal &&val);
+    template <class TVal> void init(TVal &&v);
 
-    template <class T, class Arr>
-    static Arr scalar_to_arr(T x) { Arr a{}; a[0] = static_cast<typename Arr::value_type>(x); return a; }
+    template <class T>
+    static std::array<T,4> to_array(std::initializer_list<T> il);
 };
 
 template <class TStr>
-template <class T>
-T &AttrValue<TStr>::at(std::size_t i) {
-    static_assert(std::is_same_v<T, std::int64_t> || std::is_same_v<T, double>,
-                  "AttrValue::at<T> → только int64_t или double");
-    if (std::holds_alternative<std::array<T,4>>(_v))  return std::get<std::array<T,4>>(_v).at(i);
-    if (std::holds_alternative<std::vector<T>>(_v))   return std::get<std::vector<T>>(_v).at(i);
+int64_t &AttrValue<TStr>::at_i64(std::size_t i) {
+    if (std::holds_alternative<std::array<std::int64_t,4>>(_v))
+        return std::get<std::array<std::int64_t,4>>(_v).at(i);
+    
+    if (std::holds_alternative<std::vector<std::int64_t>>(_v))
+        return std::get<std::vector<std::int64_t>>(_v).at(i);
+    
     throw std::bad_variant_access{};
 }
+template <class TStr>
+double &AttrValue<TStr>::at_f64(std::size_t i) {
+    if (std::holds_alternative<std::array<double,4>>(_v))
+        return std::get<std::array<double,4>>(_v).at(i);
+    
+    if (std::holds_alternative<std::vector<double>>(_v))
+        return std::get<std::vector<double>>(_v).at(i);
+    
+    throw std::bad_variant_access{};
+}
+template <class TStr>
+void AttrValue<TStr>::push_i64(int64_t v) {
+    if (!is_vec_i64()) _v = std::vector<std::int64_t>{};
 
+    std::get<std::vector<std::int64_t>>(_v).push_back(v);
+}
+template <class TStr>
+void AttrValue<TStr>::push_f64(double v) {
+    if (!is_vec_f64()) _v = std::vector<double>{};
+
+    std::get<std::vector<double>>(_v).push_back(v);
+}
+template <class TStr>
+bool AttrValue<TStr>::pop_i64(int64_t &out) {
+    if (!is_vec_i64()) return false;
+
+    auto &vec = std::get<std::vector<std::int64_t>>(_v);
+
+    if (vec.empty()) return false;
+
+    out = vec.back(); vec.pop_back(); return true;
+}
+template <class TStr>
+bool AttrValue<TStr>::pop_f64(double &out) {
+    if (!is_vec_f64()) return false;
+
+    auto &vec = std::get<std::vector<double>>(_v);
+
+    if (vec.empty()) return false;
+    
+    out = vec.back(); vec.pop_back(); return true;
+}
 template <class TStr>
 template <class TVal>
 void AttrValue<TStr>::init(TVal &&val) {
-    using raw_t = detail::remove_cvref_t<TVal>;
-    if constexpr (std::is_same_v<raw_t, variant_type>)      _v = std::forward<TVal>(val);
-    else if constexpr (std::is_integral_v<raw_t>)           _v = scalar_to_arr<raw_t, std::array<std::int64_t,4>>(val);
-    else if constexpr (std::is_floating_point_v<raw_t>)     _v = scalar_to_arr<raw_t, std::array<double,4>>(val);
-    else                                                    _v = std::forward<TVal>(val);
+    using raw = decay_t<TVal>;
+
+    if constexpr (std::is_same_v<raw, variant_type>) _v = std::forward<TVal>(val);
+    else if constexpr (std::is_integral_v<raw>) _v = std::array<std::int64_t,4>{static_cast<int64_t>(val),0,0,0};
+    else if constexpr (std::is_floating_point_v<raw>) _v = std::array<double,4>{static_cast<double>(val),0,0,0};
+    else _v = std::forward<TVal>(val);
+}
+template <class TStr>
+template <class T>
+std::array<T,4> AttrValue<TStr>::to_array(std::initializer_list<T> il) {
+    std::array<T,4> arr{static_cast<T>(0),static_cast<T>(0),static_cast<T>(0),static_cast<T>(0)};
+    std::size_t i = 0;
+
+    for (T v : il) { if (i < 4) arr[i++] = v; else break; }
+
+    return arr;
 }
 
 template <class TStr = std::string>
-struct Attr {
-    TStr name{};
-    AttrValue<TStr> value{};
-
-    Attr() = default;
-    Attr(TStr n, AttrValue<TStr> v) : name(std::move(n)), value(std::move(v)) {}
-};
+struct Attr { TStr name{}; AttrValue<TStr> value{}; };
 
 template <class TStr = std::string>
 class Widget {
 public:
-    explicit Widget(const TStr &nm = {}) : _name(nm) {}
-    explicit Widget(AttrValue<TStr> nm)  : _name(std::move(nm)) {}
+    explicit Widget(const TStr &n = {}) : _name(n) {}
+    explicit Widget(AttrValue<TStr> n) : _name(std::move(n)) {}
 
-    void            set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>*get_attr(const TStr &k);
-    const AttrValue<TStr>*get_attr(const TStr &k) const;
+    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
+    AttrValue<TStr>* get_attr(const TStr &k);
+    const AttrValue<TStr>* get_attr(const TStr &k) const;
 
     Widget &add_child(Widget w) { _children.emplace_back(std::move(w)); return _children.back(); }
     const std::vector<Widget>& children() const { return _children; }
 
-private:
+protected:
     AttrValue<TStr> _name;
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     std::vector<Widget> _children;
 };
-
 template <class TStr>
 AttrValue<TStr>* Widget<TStr>::get_attr(const TStr &k) {
-    auto it = _dyn.find(k);
-    return it == _dyn.end() ? nullptr : &it->second;
+    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
 }
 template <class TStr>
 const AttrValue<TStr>* Widget<TStr>::get_attr(const TStr &k) const {
-    auto it = _dyn.find(k);
-    return it == _dyn.end() ? nullptr : &it->second;
+    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
 }
 
 template <class TStr = std::string>
 class Node {
 public:
-    explicit Node(const TStr &nm = {}) : _name(nm) {}
-    explicit Node(AttrValue<TStr> nm)   : _name(std::move(nm)) {}
+    explicit Node(const TStr &n = {}) : _name(n) {}
+    explicit Node(AttrValue<TStr> n) : _name(std::move(n)) {}
 
-    Widget<TStr> &add_widget(Widget<TStr> w) { _widgets.emplace_back(std::move(w)); return _widgets.back(); }
+    Widget<TStr>& add_widget(Widget<TStr> w) { _widgets.emplace_back(std::move(w)); return _widgets.back(); }
     const std::vector<Widget<TStr>>& widgets() const { return _widgets; }
 
-    void            set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>*get_attr(const TStr &k);
-    const AttrValue<TStr>*get_attr(const TStr &k) const;
+    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
+        AttrValue<TStr>* get_attr(const TStr &k);
+    const AttrValue<TStr>* get_attr(const TStr &k) const;
 
-private:
-    AttrValue<TStr> _name;
-    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
-    std::vector<Widget<TStr>> _widgets;
+protected:
+    AttrValue<TStr>                             _name;
+    std::unordered_map<TStr, AttrValue<TStr>>   _dyn;
+    std::vector<Widget<TStr>>                   _widgets;
 };
 
 template <class TStr>
-AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k) {
+AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k)
+{
     auto it = _dyn.find(k);
     return it == _dyn.end() ? nullptr : &it->second;
 }
+
 template <class TStr>
-const AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k) const {
+const AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k) const
+{
     auto it = _dyn.find(k);
     return it == _dyn.end() ? nullptr : &it->second;
 }
 
 class Hyperlink {
 public:
-    Hyperlink(std::size_t from = 0, std::size_t to = 0, double w = 1.0)
-        : _from(from), _to(to), _weight(w) {}
+    Hyperlink(std::size_t from = 0, std::size_t to = 0, double w = 1.0) : _from(from), _to(to), _weight(w) {}
 
-    std::size_t from()   const { return _from;   }
-    std::size_t to()     const { return _to;     }
-    double      weight() const { return _weight; }
+    std::size_t from() const { return _from; }
+    std::size_t to() const { return _to; }
+    double weight() const { return _weight; }
 
-private:
+protected:
     std::size_t _from{};
     std::size_t _to{};
-    double      _weight{1.0};
+    double _weight{1.0};
 };
 
 }
