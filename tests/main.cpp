@@ -1,11 +1,8 @@
-//
-// Created by Flynn on 23.06.2025.
-//
-
 #include "graph.h"
+#include "graph_test.h"
 
 int main()
 {
-    // Calling actual tests
+    (void) test_graph_init();
     return 0;
 }
