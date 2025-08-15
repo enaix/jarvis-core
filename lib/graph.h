@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+#include <cassert>
 
 namespace jsc {
 
@@ -65,10 +66,14 @@ public:
     const uint64_t &at_ui64(std::size_t i) const { return reinterpret_cast<const uint64_t&>(at_i64(i)); }
     const double &at_f64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_f64(i); }
 
-    void push_i64(int64_t v);
-    void push_f64(double  v);
+    void push_i64(int64_t v) { do_push<std::int64_t>(v); }
+    void push_f64(double v) { do_push<double>(v); }
+
+    void pop_i64() { do_pop<std::int64_t>(); }
+    void pop_f64() { do_pop<double>(); }
+
     bool pop_i64(int64_t &out);
-    bool pop_f64(double  &out);
+    bool pop_f64(double &out);
 
 protected:
     variant_type _v{};
@@ -83,6 +88,48 @@ protected:
 
     template <class T>
     static std::array<T,4> to_array(std::initializer_list<T> il);
+
+    template <class T>
+    void do_push(T v) {
+        if (std::holds_alternative<std::vector<T>>(_v)) {
+            std::get<std::vector<T>>(_v).push_back(v);
+            return;
+        }
+        if (std::holds_alternative<std::array<T,4>>(_v)) {
+            const auto &a = std::get<std::array<T,4>>(_v);
+            std::vector<T> vec;
+            vec.reserve(a.size() + 1);
+            for (auto x : a) if (!is_empty(x)) vec.push_back(x);
+            vec.push_back(v);
+            _v = std::move(vec);
+            return;
+        }
+        if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
+            std::holds_alternative<std::array<double,4>>(_v)) {
+            assert(false && "do_push<T>: wrong array alternative ");
+        }
+        _v = std::vector<T>{v};
+    }
+
+    template <class T>
+    void do_pop() {
+        if (std::holds_alternative<std::array<T,4>>(_v)) {
+            auto &a = std::get<std::array<T,4>>(_v);
+            for (std::size_t i = a.size(); i > 0; --i) {
+                if (!is_empty(a[i-1])) { a[i-1] = empty_val<T>(); return; }
+            }
+            return;
+        }
+        if (std::holds_alternative<std::vector<T>>(_v)) {
+            auto &vec = std::get<std::vector<T>>(_v);
+            if (!vec.empty()) vec.pop_back();
+            return;
+        }
+        assert(false && "do_pop<T>: wrong variant alternative ");
+    }
+
+    template <class T>
+    static T empty_val();
 };
 
 template <class TStr>
@@ -103,62 +150,36 @@ double &AttrValue<TStr>::at_f64(std::size_t i) {
 }
 
 template <class TStr>
-void AttrValue<TStr>::push_i64(int64_t v) {
-    if (std::holds_alternative<std::vector<std::int64_t>>(_v)) {
-        std::get<std::vector<std::int64_t>>(_v).push_back(v);
-        return;
-    }
-    if (std::holds_alternative<std::array<std::int64_t,4>>(_v)) {
-        const auto &a = std::get<std::array<std::int64_t,4>>(_v);
-        std::vector<std::int64_t> vec;
-        for (auto x : a) if (!is_empty(x)) vec.push_back(x);
-        vec.push_back(v);
-        _v = std::move(vec);
-        return;
-    }
-    _v = std::vector<std::int64_t>{v};
-}
-template <class TStr>
-void AttrValue<TStr>::push_f64(double v) {
-    if (std::holds_alternative<std::vector<double>>(_v)) {
-        std::get<std::vector<double>>(_v).push_back(v);
-        return;
-    }
-    if (std::holds_alternative<std::array<double,4>>(_v)) {
-        const auto &a = std::get<std::array<double,4>>(_v);
-        std::vector<double> vec;
-        for (auto x : a) if (!is_empty(x)) vec.push_back(x);
-        vec.push_back(v);
-        _v = std::move(vec);
-        return;
-    }
-    _v = std::vector<double>{v};
-}
-template <class TStr>
 bool AttrValue<TStr>::pop_i64(int64_t &out) {
     if (std::holds_alternative<std::array<std::int64_t,4>>(_v)) {
-        const auto &a = std::get<std::array<std::int64_t,4>>(_v);
-        std::vector<std::int64_t> vec;
-        for (auto x : a) if (!is_empty(x)) vec.push_back(x);
-        _v = vec;
+        auto &a = std::get<std::array<std::int64_t,4>>(_v);
+        for (std::size_t i = a.size(); i > 0; --i) {
+            if (!is_empty(a[i-1])) { out = a[i-1]; a[i-1] = empty_i64(); return true; }
+        }
+        return false;
     }
-    if (!std::holds_alternative<std::vector<std::int64_t>>(_v)) return false;
-    auto &vec = std::get<std::vector<std::int64_t>>(_v);
-    if (vec.empty()) return false;
-    out = vec.back(); vec.pop_back(); return true;
+    if (std::holds_alternative<std::vector<std::int64_t>>(_v)) {
+        auto &vec = std::get<std::vector<std::int64_t>>(_v);
+        if (vec.empty()) return false;
+        out = vec.back(); vec.pop_back(); return true;
+    }
+    return false;
 }
 template <class TStr>
 bool AttrValue<TStr>::pop_f64(double &out) {
     if (std::holds_alternative<std::array<double,4>>(_v)) {
-        const auto &a = std::get<std::array<double,4>>(_v);
-        std::vector<double> vec;
-        for (auto x : a) if (!is_empty(x)) vec.push_back(x);
-        _v = vec;
+        auto &a = std::get<std::array<double,4>>(_v);
+        for (std::size_t i = a.size(); i > 0; --i) {
+            if (!is_empty(a[i-1])) { out = a[i-1]; a[i-1] = empty_f64(); return true; }
+        }
+        return false;
     }
-    if (!std::holds_alternative<std::vector<double>>(_v)) return false;
-    auto &vec = std::get<std::vector<double>>(_v);
-    if (vec.empty()) return false;
-    out = vec.back(); vec.pop_back(); return true;
+    if (std::holds_alternative<std::vector<double>>(_v)) {
+        auto &vec = std::get<std::vector<double>>(_v);
+        if (vec.empty()) return false;
+        out = vec.back(); vec.pop_back(); return true;
+    }
+    return false;
 }
 
 template <class TStr>
@@ -181,6 +202,7 @@ void AttrValue<TStr>::init(TVal&& val) {
         _v = std::forward<TVal>(val);
     }
 }
+
 template <class TStr>
 template <class T>
 std::array<T,4> AttrValue<TStr>::to_array(std::initializer_list<T> il) {
@@ -188,8 +210,15 @@ std::array<T,4> AttrValue<TStr>::to_array(std::initializer_list<T> il) {
     if constexpr (std::is_same_v<T,std::int64_t>) a.fill(static_cast<T>(empty_i64()));
     else a.fill(static_cast<T>(empty_f64()));
     std::size_t i = 0;
-    for (T v : il) { if (i < 4) a[i++] = v; else break; }
+    for (T v : il) { if (i < a.size()) a[i++] = v; else break; }
     return a;
+}
+
+template <class TStr>
+template <class T>
+T AttrValue<TStr>::empty_val() {
+    if constexpr (std::is_same_v<T,std::int64_t>) return static_cast<T>(empty_i64());
+    else return static_cast<T>(empty_f64());
 }
 
 template <class TStr = std::string>
@@ -254,8 +283,8 @@ public:
     Hyperlink(std::size_t from = 0, std::size_t to = 0, double w = 1.0)
         : _from(from), _to(to), _weight(w) {}
 
-    std::size_t from() const { return _from;   }
-    std::size_t to() const { return _to;     }
+    std::size_t from() const { return _from; }
+    std::size_t to() const { return _to; }
     double weight() const { return _weight; }
 
 protected:
@@ -263,5 +292,6 @@ protected:
     std::size_t _to{};
     double _weight{1.0};
 };
+
 }
 #endif
