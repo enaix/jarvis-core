@@ -41,7 +41,9 @@ public:
     template <class T> T &get() { return std::get<T>(_v); }
     template <class T> const T &get() const { return std::get<T>(_v); }
 
-    bool is_str() const { return std::holds_alternative<TStr>(_v); }
+    bool is_str() const {
+        return std::holds_alternative<TStr>(_v);
+    }
     bool is_vec_i64() const {
         return std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
                std::holds_alternative<std::vector<std::int64_t>>(_v);
@@ -61,7 +63,7 @@ public:
     int64_t &at_i64 (std::size_t i);
     uint64_t &at_ui64(std::size_t i) { return reinterpret_cast<uint64_t&>(at_i64(i)); }
     double &at_f64 (std::size_t i);
-
+    
     const int64_t &at_i64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_i64(i); }
     const uint64_t &at_ui64(std::size_t i) const { return reinterpret_cast<const uint64_t&>(at_i64(i)); }
     const double &at_f64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_f64(i); }
@@ -69,11 +71,19 @@ public:
     void push_i64(int64_t v) { do_push<std::int64_t>(v); }
     void push_f64(double v) { do_push<double>(v); }
 
-    void pop_i64() { do_pop<std::int64_t>(); }
-    void pop_f64() { do_pop<double>(); }
-
-    bool pop_i64(int64_t &out);
-    bool pop_f64(double &out);
+    void pop() {
+        if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
+            std::holds_alternative<std::vector<std::int64_t>>(_v)) {
+            do_pop<std::int64_t>();
+            return;
+        }
+        if (std::holds_alternative<std::array<double,4>>(_v) ||
+            std::holds_alternative<std::vector<double>>(_v)) {
+            do_pop<double>();
+            return;
+        }
+        assert((std::holds_alternative<TStr>(_v)) && "pop(): unsupported variant alternative");
+    }
 
 protected:
     variant_type _v{};
@@ -84,10 +94,35 @@ protected:
     static bool is_empty(double  x) { return std::isnan(x); }
 
     template <class TVal>
-    void init(TVal&& v);
+    void init(TVal&& v) {
+        using raw = decay_t<TVal>;
+        if constexpr (std::is_same_v<raw, variant_type>) {
+            _v = std::forward<TVal>(v);
+        } else if constexpr (std::is_integral_v<raw>) {
+            std::array<std::int64_t,4> a{};
+            a[0] = static_cast<std::int64_t>(v);
+            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_i64();
+            _v = a;
+        } else if constexpr (std::is_floating_point_v<raw>) {
+            std::array<double,4> a{};
+            a[0] = static_cast<double>(v);
+            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_f64();
+            _v = a;
+        } else {
+            _v = std::forward<TVal>(v);
+        }
+    }
 
     template <class T>
-    static std::array<T,4> to_array(std::initializer_list<T> il);
+    static std::array<T,4> to_array(std::initializer_list<T> il) {
+        std::array<T,4> a{};
+        std::size_t i = 0;
+        for (T x : il) { if (i < a.size()) a[i++] = x; else break; }
+        const T v = std::is_same_v<T,std::int64_t> ? static_cast<T>(empty_i64())
+                                                   : static_cast<T>(empty_f64());
+        for ( ; i < a.size(); ++i) a[i] = v;
+        return a;
+    }
 
     template <class T>
     void do_push(T v) {
@@ -106,7 +141,7 @@ protected:
         }
         if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
             std::holds_alternative<std::array<double,4>>(_v)) {
-            assert(false && "do_push<T>: wrong array alternative ");
+            assert((std::holds_alternative<std::array<T,4>>(_v)) && "do_push<T>: wrong array alternative");
         }
         _v = std::vector<T>{v};
     }
@@ -125,11 +160,16 @@ protected:
             if (!vec.empty()) vec.pop_back();
             return;
         }
-        assert(false && "do_pop<T>: wrong variant alternative ");
+        assert((std::holds_alternative<std::array<T,4>>(_v) ||
+                std::holds_alternative<std::vector<T>>(_v)) &&
+               "do_pop<T>: wrong variant alternative");
     }
 
     template <class T>
-    static T empty_val();
+    static T empty_val() {
+        if constexpr (std::is_same_v<T,std::int64_t>) return static_cast<T>(empty_i64());
+        else return static_cast<T>(empty_f64());
+    }
 };
 
 template <class TStr>
@@ -149,78 +189,6 @@ double &AttrValue<TStr>::at_f64(std::size_t i) {
     throw std::bad_variant_access{};
 }
 
-template <class TStr>
-bool AttrValue<TStr>::pop_i64(int64_t &out) {
-    if (std::holds_alternative<std::array<std::int64_t,4>>(_v)) {
-        auto &a = std::get<std::array<std::int64_t,4>>(_v);
-        for (std::size_t i = a.size(); i > 0; --i) {
-            if (!is_empty(a[i-1])) { out = a[i-1]; a[i-1] = empty_i64(); return true; }
-        }
-        return false;
-    }
-    if (std::holds_alternative<std::vector<std::int64_t>>(_v)) {
-        auto &vec = std::get<std::vector<std::int64_t>>(_v);
-        if (vec.empty()) return false;
-        out = vec.back(); vec.pop_back(); return true;
-    }
-    return false;
-}
-template <class TStr>
-bool AttrValue<TStr>::pop_f64(double &out) {
-    if (std::holds_alternative<std::array<double,4>>(_v)) {
-        auto &a = std::get<std::array<double,4>>(_v);
-        for (std::size_t i = a.size(); i > 0; --i) {
-            if (!is_empty(a[i-1])) { out = a[i-1]; a[i-1] = empty_f64(); return true; }
-        }
-        return false;
-    }
-    if (std::holds_alternative<std::vector<double>>(_v)) {
-        auto &vec = std::get<std::vector<double>>(_v);
-        if (vec.empty()) return false;
-        out = vec.back(); vec.pop_back(); return true;
-    }
-    return false;
-}
-
-template <class TStr>
-template <class TVal>
-void AttrValue<TStr>::init(TVal&& val) {
-    using raw = decay_t<TVal>;
-    if constexpr (std::is_same_v<raw, variant_type>) {
-        _v = std::forward<TVal>(val);
-    } else if constexpr (std::is_integral_v<raw>) {
-        std::array<std::int64_t,4> a{};
-        a.fill(empty_i64());
-        a[0] = static_cast<std::int64_t>(val);
-        _v = a;
-    } else if constexpr (std::is_floating_point_v<raw>) {
-        std::array<double,4> a{};
-        a.fill(empty_f64());
-        a[0] = static_cast<double>(val);
-        _v = a;
-    } else {
-        _v = std::forward<TVal>(val);
-    }
-}
-
-template <class TStr>
-template <class T>
-std::array<T,4> AttrValue<TStr>::to_array(std::initializer_list<T> il) {
-    std::array<T,4> a{};
-    if constexpr (std::is_same_v<T,std::int64_t>) a.fill(static_cast<T>(empty_i64()));
-    else a.fill(static_cast<T>(empty_f64()));
-    std::size_t i = 0;
-    for (T v : il) { if (i < a.size()) a[i++] = v; else break; }
-    return a;
-}
-
-template <class TStr>
-template <class T>
-T AttrValue<TStr>::empty_val() {
-    if constexpr (std::is_same_v<T,std::int64_t>) return static_cast<T>(empty_i64());
-    else return static_cast<T>(empty_f64());
-}
-
 template <class TStr = std::string>
 struct Attr { TStr name{}; AttrValue<TStr> value{}; };
 
@@ -231,8 +199,8 @@ public:
     explicit Widget(AttrValue<TStr> n) : _name(std::move(n)) {}
 
     void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>* get_attr(const TStr &k);
-    const AttrValue<TStr>* get_attr(const TStr &k) const;
+    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 
     Widget &add_child(Widget w) { _children.emplace_back(std::move(w)); return _children.back(); }
     const std::vector<Widget>& children() const { return _children; }
@@ -242,14 +210,6 @@ protected:
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     std::vector<Widget> _children;
 };
-template <class TStr>
-AttrValue<TStr>* Widget<TStr>::get_attr(const TStr &k) {
-    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
-}
-template <class TStr>
-const AttrValue<TStr>* Widget<TStr>::get_attr(const TStr &k) const {
-    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
-}
 
 template <class TStr = std::string>
 class Node {
@@ -261,22 +221,14 @@ public:
     const std::vector<Widget<TStr>>& widgets() const { return _widgets; }
 
     void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>* get_attr(const TStr &k);
-    const AttrValue<TStr>* get_attr(const TStr &k) const;
+    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 
 protected:
     AttrValue<TStr> _name;
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     std::vector<Widget<TStr>> _widgets;
 };
-template <class TStr>
-AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k) {
-    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
-}
-template <class TStr>
-const AttrValue<TStr>* Node<TStr>::get_attr(const TStr &k) const {
-    auto it = _dyn.find(k); return it == _dyn.end() ? nullptr : &it->second;
-}
 
 class Hyperlink {
 public:
