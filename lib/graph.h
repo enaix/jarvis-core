@@ -120,7 +120,7 @@ protected:
         for (T x : il) { if (i < a.size()) a[i++] = x; else break; }
         const T v = std::is_same_v<T,std::int64_t> ? static_cast<T>(empty_i64())
                                                    : static_cast<T>(empty_f64());
-        for ( ; i < a.size(); ++i) a[i] = v;
+        for (std::size_t j = il.size(); j < a.size(); ++j) a[j] = v;
         return a;
     }
 
@@ -232,17 +232,16 @@ protected:
 
 class Hyperlink {
 public:
-    Hyperlink(std::size_t from = 0, std::size_t to = 0, double w = 1.0)
-        : _from(from), _to(to), _weight(w) {}
+    Hyperlink(std::size_t from = 0, std::size_t to = 0, double = 1.0)
+        : _from(from), _to(to) {}
 
     std::size_t from() const { return _from; }
     std::size_t to() const { return _to; }
-    double weight() const { return _weight; }
+    double weight() const { return 1.0; }
 
 protected:
     std::size_t _from{};
     std::size_t _to{};
-    double _weight{1.0};
 };
 
 }
