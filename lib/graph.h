@@ -1,151 +1,248 @@
-//
-// Created by Flynn on 23.06.2025.
-//
-
 #ifndef GRAPH_H
 #define GRAPH_H
 
-#include <memory>
-#include <vector>
-#include <variant>
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <string>
+#include <type_traits>
+#include <unordered_map>
+#include <variant>
+#include <vector>
+#include <cassert>
 
+namespace jsc {
 
-namespace jsc
-{
+template <class T>
+using decay_t = std::decay_t<T>;
 
-class Hyperlink; // forward-decl
+template <class TStr = std::string>
+using AttrVariant = std::variant<
+    std::array<std::int64_t, 4>,
+    std::array<double, 4>,
+    TStr,
+    std::vector<std::int64_t>,
+    std::vector<double>
+>;
 
-// Attribute can take the following types :
-// Since sizeof(std::string) is 32, we can efficiently store 8*4 bytes
-template<class TStr>
-using AttrVariant = std::variant<std::array<std::int64_t, 4>, std::array<double, 4>, TStr, std::vector<std::int64_t>, std::vector<double>>;
-// Note: do we always need 64 bit int/float values?
-
-
-
-/**
- * @brief Variable attribute type. Supports tuples of integral type (4 elements), vector of integral types or a TStr
- * @tparam TStr Variable string class
- */
-template<class TStr>
-class AttrValue
-{
-protected:
-    AttrVariant<TStr> _value;
-
+template <class TStr = std::string>
+class AttrValue {
 public:
-    AttrValue() {}
+    using variant_type = AttrVariant<TStr>;
 
-    // Init from type which is known at compile-time
-    template<class TVal>
-    explicit AttrValue(const TVal& val) { init(val); }
+    AttrValue() = default;
+    AttrValue(std::initializer_list<std::int64_t> il) { _v = to_array(il); }
+    AttrValue(std::initializer_list<double> il) { _v = to_array(il); }
 
-    // Add move, copy ctor
-    // ...
+    template <class TVal, class = std::enable_if_t<!std::is_same_v<decay_t<TVal>, AttrValue>>>
+    explicit AttrValue(TVal&& v) { init(std::forward<TVal>(v)); }
 
-    /**
-     * @brief Fetch a single integral value
-     * @tparam TVal Value type
-     */
-    template<class TVal>
-    void get() -> TVal&
-    {
-        // Implement logic for fetching a singular integral value
-        // ...
+    template <class T> T &get() { return std::get<T>(_v); }
+    template <class T> const T &get() const { return std::get<T>(_v); }
+
+    bool is_str() const {
+        return std::holds_alternative<TStr>(_v);
+    }
+    bool is_vec_i64() const {
+        return std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
+               std::holds_alternative<std::vector<std::int64_t>>(_v);
+    }
+    bool is_vec_f64() const {
+        return std::holds_alternative<std::array<double,4>>(_v) ||
+               std::holds_alternative<std::vector<double>>(_v);
     }
 
-    /**
-     * @brief Fetch an i-th integral value
-     * @param index Element index
-     */
-    template<class TVal>
-    void at(std::size_t index) -> TVal&
-    {
-        // Determine if _value is an array<4> or a vector
+    TStr &str() { return std::get<TStr>(_v); }
+    const TStr &str() const { return std::get<TStr>(_v); }
+
+    int64_t &i64() { return at_i64(0); }
+    uint64_t &ui64() { return reinterpret_cast<uint64_t&>(at_i64(0)); }
+    double &f64() { return at_f64(0); }
+
+    int64_t &at_i64 (std::size_t i);
+    uint64_t &at_ui64(std::size_t i) { return reinterpret_cast<uint64_t&>(at_i64(i)); }
+    double &at_f64 (std::size_t i);
+    
+    const int64_t &at_i64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_i64(i); }
+    const uint64_t &at_ui64(std::size_t i) const { return reinterpret_cast<const uint64_t&>(at_i64(i)); }
+    const double &at_f64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_f64(i); }
+
+    void push_i64(int64_t v) { do_push<std::int64_t>(v); }
+    void push_f64(double v) { do_push<double>(v); }
+
+    void pop() {
+        if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
+            std::holds_alternative<std::vector<std::int64_t>>(_v)) {
+            do_pop<std::int64_t>();
+            return;
+        }
+        if (std::holds_alternative<std::array<double,4>>(_v) ||
+            std::holds_alternative<std::vector<double>>(_v)) {
+            do_pop<double>();
+            return;
+        }
+        assert((std::holds_alternative<TStr>(_v)) && "pop(): unsupported variant alternative");
     }
-
-    /**
-     * @brief Return the stored string
-     */
-    TStr& str() { return _value; } // Do we need to
-
-    // Create const versions of these methods
-
-    // Add explicit functions to fetch (i64, ui64, f64, i64(i), ...)
 
 protected:
-    /**
-     * @brief Initialize empty object with new values
-     * @param val Value to set
-     */
-    template<class TVal>
-    void init(const TVal& val)
-    {
-        if constexpr (std::is_integral_v<std::decay_t<TVal>>)
-        {
-            // Use std::array for a single value
-            _value = std::array<std::decay_t<TVal>, 4>(val);
-        } else {
-            // Place value on heap
+    variant_type _v{};
 
-            // ...
+    static constexpr std::int64_t empty_i64() { return std::numeric_limits<std::int64_t>::min(); }
+    static double empty_f64() { return std::numeric_limits<double>::quiet_NaN(); }
+    static bool is_empty(int64_t x) { return x == empty_i64(); }
+    static bool is_empty(double  x) { return std::isnan(x); }
+
+    template <class TVal>
+    void init(TVal&& v) {
+        using raw = decay_t<TVal>;
+        if constexpr (std::is_same_v<raw, variant_type>) {
+            _v = std::forward<TVal>(v);
+        } else if constexpr (std::is_integral_v<raw>) {
+            std::array<std::int64_t,4> a{};
+            a[0] = static_cast<std::int64_t>(v);
+            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_i64();
+            _v = a;
+        } else if constexpr (std::is_floating_point_v<raw>) {
+            std::array<double,4> a{};
+            a[0] = static_cast<double>(v);
+            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_f64();
+            _v = a;
+        } else {
+            _v = std::forward<TVal>(v);
         }
     }
+
+    template <class T>
+    static std::array<T,4> to_array(std::initializer_list<T> il) {
+        std::array<T,4> a{};
+        std::size_t i = 0;
+        for (T x : il) { if (i < a.size()) a[i++] = x; else break; }
+        const T v = std::is_same_v<T,std::int64_t> ? static_cast<T>(empty_i64())
+                                                   : static_cast<T>(empty_f64());
+        for (std::size_t j = il.size(); j < a.size(); ++j) a[j] = v;
+        return a;
+    }
+
+    template <class T>
+    void do_push(T v) {
+        if (std::holds_alternative<std::vector<T>>(_v)) {
+            std::get<std::vector<T>>(_v).push_back(v);
+            return;
+        }
+        if (std::holds_alternative<std::array<T,4>>(_v)) {
+            const auto &a = std::get<std::array<T,4>>(_v);
+            std::vector<T> vec;
+            vec.reserve(a.size() + 1);
+            for (auto x : a) if (!is_empty(x)) vec.push_back(x);
+            vec.push_back(v);
+            _v = std::move(vec);
+            return;
+        }
+        if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
+            std::holds_alternative<std::array<double,4>>(_v)) {
+            assert((std::holds_alternative<std::array<T,4>>(_v)) && "do_push<T>: wrong array alternative");
+        }
+        _v = std::vector<T>{v};
+    }
+
+    template <class T>
+    void do_pop() {
+        if (std::holds_alternative<std::array<T,4>>(_v)) {
+            auto &a = std::get<std::array<T,4>>(_v);
+            for (std::size_t i = a.size(); i > 0; --i) {
+                if (!is_empty(a[i-1])) { a[i-1] = empty_val<T>(); return; }
+            }
+            return;
+        }
+        if (std::holds_alternative<std::vector<T>>(_v)) {
+            auto &vec = std::get<std::vector<T>>(_v);
+            if (!vec.empty()) vec.pop_back();
+            return;
+        }
+        assert((std::holds_alternative<std::array<T,4>>(_v) ||
+                std::holds_alternative<std::vector<T>>(_v)) &&
+               "do_pop<T>: wrong variant alternative");
+    }
+
+    template <class T>
+    static T empty_val() {
+        if constexpr (std::is_same_v<T,std::int64_t>) return static_cast<T>(empty_i64());
+        else return static_cast<T>(empty_f64());
+    }
 };
 
-
-template<class TStr>
-class Attr
-{
-protected:
-    TStr _name;
-    AttrValue<TStr> _value;
-
-    // Implement ctors and other methods
-};
-
-
-template<class TStr>
-class Widget
-{
-protected:
-    AttrValue<TStr> _name;
-    // std::vector<Widget<TStr>> _widgets; // children
-    // ...
-
-    // We need to store a hashmap of attributes
-
-public:
-    Widget() {}
-};
-
-
-template<class TStr>
-class Node // aka Topic
-{
-protected:
-    AttrValue<TStr> _name;
-    // Widget<TStr> _root;
-    // ...
-
-    // Should also contain a hashmap of attributes
-
-public:
-    Node() {}
-};
-
-
-class Hyperlink
-{
-protected:
-    // ...
-
-public:
-    Hyperlink() {}
-};
-
-
+template <class TStr>
+int64_t &AttrValue<TStr>::at_i64(std::size_t i) {
+    if (std::holds_alternative<std::array<std::int64_t,4>>(_v))
+        return std::get<std::array<std::int64_t,4>>(_v).at(i);
+    if (std::holds_alternative<std::vector<std::int64_t>>(_v))
+        return std::get<std::vector<std::int64_t>>(_v).at(i);
+    throw std::bad_variant_access{};
+}
+template <class TStr>
+double &AttrValue<TStr>::at_f64(std::size_t i) {
+    if (std::holds_alternative<std::array<double,4>>(_v))
+        return std::get<std::array<double,4>>(_v).at(i);
+    if (std::holds_alternative<std::vector<double>>(_v))
+        return std::get<std::vector<double>>(_v).at(i);
+    throw std::bad_variant_access{};
 }
 
-#endif //GRAPH_H
+template <class TStr = std::string>
+struct Attr { TStr name{}; AttrValue<TStr> value{}; };
+
+template <class TStr = std::string>
+class Widget {
+public:
+    explicit Widget(const TStr &n = {}) : _name(n) {}
+    explicit Widget(AttrValue<TStr> n) : _name(std::move(n)) {}
+
+    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
+    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+
+    Widget &add_child(Widget w) { _children.emplace_back(std::move(w)); return _children.back(); }
+    const std::vector<Widget>& children() const { return _children; }
+
+protected:
+    AttrValue<TStr> _name;
+    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
+    std::vector<Widget> _children;
+};
+
+template <class TStr = std::string>
+class Node {
+public:
+    explicit Node(const TStr &n = {}) : _name(n) {}
+    explicit Node(AttrValue<TStr> n) : _name(std::move(n)) {}
+
+    Widget<TStr>& add_widget(Widget<TStr> w) { _widgets.emplace_back(std::move(w)); return _widgets.back(); }
+    const std::vector<Widget<TStr>>& widgets() const { return _widgets; }
+
+    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
+    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+
+protected:
+    AttrValue<TStr> _name;
+    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
+    std::vector<Widget<TStr>> _widgets;
+};
+
+class Hyperlink {
+public:
+    Hyperlink(std::size_t from = 0, std::size_t to = 0, double = 1.0)
+        : _from(from), _to(to) {}
+
+    std::size_t from() const { return _from; }
+    std::size_t to() const { return _to; }
+    double weight() const { return 1.0; }
+
+protected:
+    std::size_t _from{};
+    std::size_t _to{};
+};
+
+}
+#endif
