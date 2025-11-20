@@ -14,9 +14,6 @@
 
 namespace jsc {
 
-template <class T>
-using decay_t = std::decay_t<T>;
-
 template <class TStr = std::string>
 using AttrVariant = std::variant<
     std::array<std::int64_t, 4>,
@@ -26,20 +23,38 @@ using AttrVariant = std::variant<
     std::vector<double>
 >;
 
+
+
+
 template <class TStr = std::string>
 class AttrValue {
 public:
     using variant_type = AttrVariant<TStr>;
 
-    AttrValue() = default;
-    AttrValue(std::initializer_list<std::int64_t> il) { _v = to_array(il); }
-    AttrValue(std::initializer_list<double> il) { _v = to_array(il); }
+    AttrValue() : _array_size(0) {}
+    explicit AttrValue(std::initializer_list<std::int64_t> il) { to_array(il); }
+    explicit AttrValue(std::initializer_list<double> il) { to_array(il); }
 
-    template <class TVal, class = std::enable_if_t<!std::is_same_v<decay_t<TVal>, AttrValue>>>
+    template <class TVal, class = std::enable_if_t<!std::is_same_v<std::decay_t<TVal>, AttrValue>>>
     explicit AttrValue(TVal&& v) { init(std::forward<TVal>(v)); }
+
+    //AttrValue(AttrValue<TStr>&& v) = default;
 
     template <class T> T &get() { return std::get<T>(_v); }
     template <class T> const T &get() const { return std::get<T>(_v); }
+
+    std::size_t size() const {
+        if (std::holds_alternative<std::array<std::int64_t, 4>>(_v) || std::holds_alternative<std::array<double, 4>>(_v))
+            return _array_size;
+        else {
+            if (std::holds_alternative<std::vector<double>>(_v))
+                return std::get<std::vector<double>>(_v).size();
+            else if (std::holds_alternative<std::vector<std::int64_t>>(_v))
+                return std::get<std::vector<std::int64_t>>(_v).size();
+            else
+                return std::get<TStr>(_v).size();
+        }
+    }
 
     bool is_str() const {
         return std::holds_alternative<TStr>(_v);
@@ -71,106 +86,100 @@ public:
     void push_i64(int64_t v) { do_push<std::int64_t>(v); }
     void push_f64(double v) { do_push<double>(v); }
 
-    void pop() {
+    bool pop() {
         if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
             std::holds_alternative<std::vector<std::int64_t>>(_v)) {
             do_pop<std::int64_t>();
-            return;
+            return true;
         }
         if (std::holds_alternative<std::array<double,4>>(_v) ||
             std::holds_alternative<std::vector<double>>(_v)) {
             do_pop<double>();
-            return;
+            return true;
         }
-        assert((std::holds_alternative<TStr>(_v)) && "pop(): unsupported variant alternative");
+        return false; // Bad variant access
+        //assert((std::holds_alternative<TStr>(_v)) && "pop(): unsupported variant alternative");
     }
 
 protected:
     variant_type _v{};
-
-    static constexpr std::int64_t empty_i64() { return std::numeric_limits<std::int64_t>::min(); }
-    static double empty_f64() { return std::numeric_limits<double>::quiet_NaN(); }
-    static bool is_empty(int64_t x) { return x == empty_i64(); }
-    static bool is_empty(double  x) { return std::isnan(x); }
+    int _array_size;
 
     template <class TVal>
     void init(TVal&& v) {
-        using raw = decay_t<TVal>;
-        if constexpr (std::is_same_v<raw, variant_type>) {
-            _v = std::forward<TVal>(v);
-        } else if constexpr (std::is_integral_v<raw>) {
+        using raw = std::decay_t<TVal>;
+        if constexpr (std::is_integral_v<raw>) {
             std::array<std::int64_t,4> a{};
             a[0] = static_cast<std::int64_t>(v);
-            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_i64();
+            _array_size = 1;
             _v = a;
         } else if constexpr (std::is_floating_point_v<raw>) {
             std::array<double,4> a{};
+            _array_size = 1;
             a[0] = static_cast<double>(v);
-            for (std::size_t i = 1; i < a.size(); ++i) a[i] = empty_f64();
             _v = a;
         } else {
+            // string or vec
             _v = std::forward<TVal>(v);
         }
     }
 
     template <class T>
-    static std::array<T,4> to_array(std::initializer_list<T> il) {
-        std::array<T,4> a{};
-        std::size_t i = 0;
-        for (T x : il) { if (i < a.size()) a[i++] = x; else break; }
-        const T v = std::is_same_v<T,std::int64_t> ? static_cast<T>(empty_i64())
-                                                   : static_cast<T>(empty_f64());
-        for (std::size_t j = il.size(); j < a.size(); ++j) a[j] = v;
-        return a;
+    void to_array(std::initializer_list<T> il) {
+        if (il.size() <= 4) {
+            _array_size = il.size();
+            std::array<T,4> a{};
+            for (size_t i = 0; i < il.size(); i++)
+                a[i] = il[i];
+            _v = a;
+        } else {
+            _v = std::vector<std::decay_t<T>>(il);
+        }
     }
 
     template <class T>
-    void do_push(T v) {
+    bool do_push(T v) {
         if (std::holds_alternative<std::vector<T>>(_v)) {
             std::get<std::vector<T>>(_v).push_back(v);
-            return;
+            return true;
         }
         if (std::holds_alternative<std::array<T,4>>(_v)) {
             const auto &a = std::get<std::array<T,4>>(_v);
             std::vector<T> vec;
-            vec.reserve(a.size() + 1);
-            for (auto x : a) if (!is_empty(x)) vec.push_back(x);
+            //vec.reserve(a.size() + 1);
+            for (std::size_t i = 0; i < _array_size; i++)
+                vec.push_back(a[i]);
             vec.push_back(v);
             _v = std::move(vec);
-            return;
+            return true;
         }
-        if (std::holds_alternative<std::array<std::int64_t,4>>(_v) ||
-            std::holds_alternative<std::array<double,4>>(_v)) {
-            assert((std::holds_alternative<std::array<T,4>>(_v)) && "do_push<T>: wrong array alternative");
-        }
-        _v = std::vector<T>{v};
+        return false; // cannot push to a string
     }
 
     template <class T>
-    void do_pop() {
+    bool do_pop() {
         if (std::holds_alternative<std::array<T,4>>(_v)) {
             auto &a = std::get<std::array<T,4>>(_v);
-            for (std::size_t i = a.size(); i > 0; --i) {
-                if (!is_empty(a[i-1])) { a[i-1] = empty_val<T>(); return; }
-            }
-            return;
+            if (_array_size > 0)
+                _array_size--;
+            return true;
         }
         if (std::holds_alternative<std::vector<T>>(_v)) {
             auto &vec = std::get<std::vector<T>>(_v);
             if (!vec.empty()) vec.pop_back();
-            return;
+            return true;
         }
-        assert((std::holds_alternative<std::array<T,4>>(_v) ||
-                std::holds_alternative<std::vector<T>>(_v)) &&
-               "do_pop<T>: wrong variant alternative");
-    }
-
-    template <class T>
-    static T empty_val() {
-        if constexpr (std::is_same_v<T,std::int64_t>) return static_cast<T>(empty_i64());
-        else return static_cast<T>(empty_f64());
+        return false; // cannot pop a string
+        //assert((std::holds_alternative<std::array<T,4>>(_v) ||
+        //        std::holds_alternative<std::vector<T>>(_v)) &&
+        //        "do_pop<T>: wrong variant alternative");
     }
 };
+
+
+#ifdef OPTIMAL_STRUCTS
+    static_assert(sizeof(AttrValue<std::string>) <= 64, "AttrValue size is not optimal for the cache line size of 64 bytes");
+#endif
 
 template <class TStr>
 int64_t &AttrValue<TStr>::at_i64(std::size_t i) {
@@ -178,7 +187,7 @@ int64_t &AttrValue<TStr>::at_i64(std::size_t i) {
         return std::get<std::array<std::int64_t,4>>(_v).at(i);
     if (std::holds_alternative<std::vector<std::int64_t>>(_v))
         return std::get<std::vector<std::int64_t>>(_v).at(i);
-    throw std::bad_variant_access{};
+    throw std::bad_variant_access{}; // The least problematic way to handle bad access
 }
 template <class TStr>
 double &AttrValue<TStr>::at_f64(std::size_t i) {
@@ -186,7 +195,7 @@ double &AttrValue<TStr>::at_f64(std::size_t i) {
         return std::get<std::array<double,4>>(_v).at(i);
     if (std::holds_alternative<std::vector<double>>(_v))
         return std::get<std::vector<double>>(_v).at(i);
-    throw std::bad_variant_access{};
+    throw std::bad_variant_access{}; // The least problematic way to handle bad access
 }
 
 template <class TStr = std::string>
@@ -196,17 +205,22 @@ template <class TStr = std::string>
 class Widget {
 public:
     explicit Widget(const TStr &n = {}) : _name(n) {}
-    explicit Widget(AttrValue<TStr> n) : _name(std::move(n)) {}
 
-    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
+    bool contains(const TStr& k) const { return _dyn.contains(k); }
+    AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 
     Widget &add_child(Widget w) { _children.emplace_back(std::move(w)); return _children.back(); }
     const std::vector<Widget>& children() const { return _children; }
+    std::vector<Widget>& children() { return _children; }
+    const Widget& child(std::size_t i) const { return _children[i]; }
+    Widget& child(std::size_t i) { return _children[i]; }
 
+    const TStr& name() const { return _name; }
+    TStr& name() { return _name; }
 protected:
-    AttrValue<TStr> _name;
+    TStr _name;
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     std::vector<Widget> _children;
 };
@@ -215,29 +229,33 @@ template <class TStr = std::string>
 class Node {
 public:
     explicit Node(const TStr &n = {}) : _name(n) {}
-    explicit Node(AttrValue<TStr> n) : _name(std::move(n)) {}
 
-    Widget<TStr>& add_widget(Widget<TStr> w) { _widgets.emplace_back(std::move(w)); return _widgets.back(); }
-    const std::vector<Widget<TStr>>& widgets() const { return _widgets; }
+    Widget<TStr>& set_widget(Widget<TStr> w) { _widget = std::move(w); return _widget; }
+    const Widget<TStr>& widget() const { return _widget; }
+    Widget<TStr>& widget() { return _widget; }
 
-    void set_attr(TStr k, AttrValue<TStr> v) { _dyn.emplace(std::move(k), std::move(v)); }
-    AttrValue<TStr>* get_attr(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-    const AttrValue<TStr>* get_attr(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
+    bool contains(const TStr& k) const { return _dyn.contains(k); }
+    AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
+    const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 
+    const TStr& name() const { return _name; }
+    TStr& name() { return _name; }
 protected:
-    AttrValue<TStr> _name;
+    TStr _name;
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
-    std::vector<Widget<TStr>> _widgets;
+    Widget<TStr> _widget;
 };
 
 class Hyperlink {
 public:
-    Hyperlink(std::size_t from = 0, std::size_t to = 0, double = 1.0)
+    Hyperlink(std::size_t from = 0, std::size_t to = 0)
         : _from(from), _to(to) {}
 
+    // TODO add hyperlink attributes
+    // TODO refactor
     std::size_t from() const { return _from; }
     std::size_t to() const { return _to; }
-    double weight() const { return 1.0; }
 
 protected:
     std::size_t _from{};
