@@ -12,6 +12,7 @@
 #include <vector>
 #include <cassert>
 
+
 namespace jsc {
 
 template <class TStr = std::string>
@@ -34,6 +35,8 @@ public:
     AttrValue() : _array_size(0) {}
     explicit AttrValue(std::initializer_list<std::int64_t> il) { to_array(il); }
     explicit AttrValue(std::initializer_list<double> il) { to_array(il); }
+    explicit AttrValue(const std::vector<std::int64_t>& vec) : _v(vec) {}
+    explicit AttrValue(const std::vector<double>& vec) : _v(vec) {}
 
     template <class TVal, class = std::enable_if_t<!std::is_same_v<std::decay_t<TVal>, AttrValue>>>
     explicit AttrValue(TVal&& v) { init(std::forward<TVal>(v)); }
@@ -129,8 +132,8 @@ protected:
         if (il.size() <= 4) {
             _array_size = il.size();
             std::array<T,4> a{};
-            for (size_t i = 0; i < il.size(); i++)
-                a[i] = il[i];
+            for (auto it = il.begin(); it != il.end(); it++)
+                a[std::distance(il.begin(), it)] = *it;
             _v = a;
         } else {
             _v = std::vector<std::decay_t<T>>(il);
@@ -207,7 +210,13 @@ public:
     explicit Widget(const TStr &n = {}) : _name(n) {}
 
     void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
-    bool contains(const TStr& k) const { return _dyn.contains(k); }
+    void set(TStr k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, const std::vector<std::int64_t>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, const std::vector<double>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+
+    bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
     AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
     const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 
@@ -235,7 +244,13 @@ public:
     Widget<TStr>& widget() { return _widget; }
 
     void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
-    bool contains(const TStr& k) const { return _dyn.contains(k); }
+    void set(TStr k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, const std::vector<std::int64_t>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(TStr k, const std::vector<double>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+
+    bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
     AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
     const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
 

@@ -29,7 +29,7 @@ inline bool test_graph_access()
     Node<std::string> a("A");
     Widget<std::string> b("root"), p("paragraph");
 
-    b.add_child(p).set("geometry", AttrValue(3.14));
+    b.add_child(p).set("geometry", {3.14});
 
     assert(b.child(0).get("geometry")->size() == 1);
     assert(b.child(0).get("geometry")->at_f64(0) == 3.14);
