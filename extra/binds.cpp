@@ -160,6 +160,7 @@ NB_MODULE(jsc_common, m) {
             "Widget name")
 
         // Set methods
+        // TODO change to references
         .def("set", [](Widget<>& self, std::string k, AttrValue<> v) {
             self.set(std::move(k), std::move(v));
         }, "key"_a, "value"_a, "Set attribute with AttrValue")

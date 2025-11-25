@@ -201,26 +201,32 @@ double &AttrValue<TStr>::at_f64(std::size_t i) {
     throw std::bad_variant_access{}; // The least problematic way to handle bad access
 }
 
-template <class TStr = std::string>
-struct Attr { TStr name{}; AttrValue<TStr> value{}; };
+
+template<class TStr = std::string>
+class AttrSet {
+public:
+    void set(const TStr& k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
+    void set(const TStr& k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(const TStr& k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(const TStr& k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(const TStr& k, const std::vector<std::int64_t>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+    void set(const TStr& k, const std::vector<double>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
+
+    bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
+    AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it != _dyn.end() ? &it->second : nullptr; }
+    const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it != _dyn.end() ? &it->second : nullptr; }
+
+protected:
+    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
+};
+
 
 template <class TStr = std::string>
-class Widget {
+class Widget : public AttrSet<TStr> {
 public:
     explicit Widget(const TStr &n = {}) : _name(n) {}
 
-    void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
-    void set(TStr k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, const std::vector<std::int64_t>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, const std::vector<double>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-
-    bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
-    AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-    const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-
-    Widget &add_child(Widget w) { _children.emplace_back(std::move(w)); return _children.back(); }
+    Widget &add_child(const Widget& w) { _children.emplace_back(std::move(w)); return _children.back(); }
     const std::vector<Widget>& children() const { return _children; }
     std::vector<Widget>& children() { return _children; }
     const Widget& child(std::size_t i) const { return _children[i]; }
@@ -230,47 +236,39 @@ public:
     TStr& name() { return _name; }
 protected:
     TStr _name;
-    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     std::vector<Widget> _children;
 };
 
+
 template <class TStr = std::string>
-class Node {
+class Node : public AttrSet<TStr> {
 public:
-    explicit Node(const TStr &n = {}) : _name(n) {}
+    explicit Node(const TStr &n = {}) : _id(std::numeric_limits<std::size_t>::max()), _name(n) {}
 
     Widget<TStr>& set_widget(Widget<TStr> w) { _widget = std::move(w); return _widget; }
     const Widget<TStr>& widget() const { return _widget; }
     Widget<TStr>& widget() { return _widget; }
 
-    void set(TStr k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
-    void set(TStr k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, const std::vector<std::int64_t>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-    void set(TStr k, const std::vector<double>& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
-
-    bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
-    AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-    const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it==_dyn.end()?nullptr:&it->second; }
-
     const TStr& name() const { return _name; }
     TStr& name() { return _name; }
+
+    std::size_t _internal_id() const { return _id; }
+    void _set_internal_id(std::size_t new_id) { _id = new_id; }
 protected:
+    std::size_t _id;
     TStr _name;
-    std::unordered_map<TStr, AttrValue<TStr>> _dyn;
     Widget<TStr> _widget;
 };
 
-class Hyperlink {
-public:
-    Hyperlink(std::size_t from = 0, std::size_t to = 0)
-        : _from(from), _to(to) {}
 
-    // TODO add hyperlink attributes
-    // TODO refactor
-    std::size_t from() const { return _from; }
-    std::size_t to() const { return _to; }
+template <class TStr = std::string>
+class Hyperlink : public AttrSet<TStr> {
+public:
+    Hyperlink(std::size_t from_id = 0, std::size_t to_id = 0)
+        : _from(from_id), _to(to_id) {}
+
+    std::size_t _id_from() const { return _from; }
+    std::size_t _id_to() const { return _to; }
 
 protected:
     std::size_t _from{};
