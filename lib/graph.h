@@ -11,6 +11,7 @@
 #include <variant>
 #include <vector>
 #include <cassert>
+#include <stdexcept>
 
 
 namespace jsc {
@@ -114,8 +115,12 @@ public:
             do_pop<double>();
             return true;
         }
+
+#ifdef ALWAYS_THROW_ON_ERROR
+        throw std::bad_variant_access{};
+#else
         return false; // Bad variant access
-        //assert((std::holds_alternative<TStr>(_v)) && "pop(): unsupported variant alternative");
+#endif
     }
 
 protected:
@@ -170,7 +175,11 @@ protected:
             _v = std::move(vec);
             return true;
         }
+#ifdef ALWAYS_THROW_ON_ERROR
+        throw std::bad_variant_access{};
+#else
         return false; // cannot push to a string
+#endif
     }
 
     template <class T>
@@ -186,7 +195,11 @@ protected:
             if (!vec.empty()) vec.pop_back();
             return true;
         }
+#ifdef ALWAYS_THROW_ON_ERROR
+        throw std::bad_variant_access{};
+#else
         return false; // cannot pop a string
+#endif
         //assert((std::holds_alternative<std::array<T,4>>(_v) ||
         //        std::holds_alternative<std::vector<T>>(_v)) &&
         //        "do_pop<T>: wrong variant alternative");
@@ -279,6 +292,50 @@ public:
 protected:
     std::size_t _from{};
     std::size_t _to{};
+};
+
+
+template <class TStr = std::string>
+class AdjGraph {
+public:
+    AdjGraph() : next_id(0) {}
+
+    bool add_node(Node<TStr>& node)  // node is now initialized
+    {
+        if (node._internal_id() != std::numeric_limits<std::size_t>::max()) {
+#ifdef ALWAYS_THROW_ON_ERROR
+            throw std::invalid_argument{}; // The node cannot be added twice
+#else
+            return false;
+#endif
+        }
+        node._set_internal_id(next_id);
+        data.insert({next_id, {std::move(node), std::vector<Hyperlink<TStr>>()}});
+        next_id++;
+        return true;
+    }
+
+    bool del_node(Node<TStr>& node)
+    {
+        if (node._internal_id() == std::numeric_limits<std::size_t>::max()) {
+#ifdef ALWAYS_THROW_ON_ERROR
+            throw std::invalid_argument{}; // The node is uninitialized
+#else
+            return false;
+#endif
+        }
+
+        data.erase(node._internal_id);
+        node._set_internal_id(std::numeric_limits<std::size_t>::max());
+        return false;
+    }
+
+    // fill out the rest
+
+protected:
+    // We can theoretically use a vector, but insertions would be not O(1)
+    std::unordered_map<std::size_t, std::pair<Node<TStr>, std::vector<Hyperlink<TStr>>>> data;
+    std::size_t next_id;
 };
 
 }

@@ -5,12 +5,17 @@ set(CMAKE_CXX_STANDARD 17)
 
 # Set debug options
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -Werror=return-type")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined -fsanitize=float-divide-by-zero -fsanitize=float-cast-overflow -Werror=return-type -DALWAYS_THROW_ON_ERROR")
 endif()
 
 option(FORCE_OPTIMAL_STRUCTS "Force the compiler to produce optimial struct sizes" OFF)
+option(ALWAYS_THROW_ON_ERROR "Always throw on error instead of returning false" ON) # Should be always enabled for alpha release
 if (FORCE_OPTIMAL_STRUCTS)
    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOPTIMAL_STRUCTS")
+endif()
+
+if (ALWAYS_THROW_ON_ERROR)
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DALWAYS_THROW_ON_ERROR")
 endif()
 
 # Python bindings
