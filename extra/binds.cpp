@@ -6,6 +6,7 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/make_iterator.h>
 #include <sstream>
 
 
@@ -147,88 +148,55 @@ NB_MODULE(jsc_common, m) {
             return oss.str();
         });
 
-    // Bind Widget class
-    nb::class_<Widget<>>(m, "Widget")
-        // Constructors
+    nb::class_<AttrSet<>>(m, "AttrSet")
         .def(nb::init<>(), "Default constructor")
-        .def(nb::init<const std::string&>(), "name"_a, "Construct with name")
-
-        // Name access
-        .def_prop_rw("name",
-            nb::overload_cast<>(&Widget<>::name, nb::const_),
-            nb::overload_cast<>(&Widget<>::name),
-            "Widget name")
 
         // Set methods
-        // TODO change to references
-        .def("set", [](Widget<>& self, std::string k, AttrValue<> v) {
-            self.set(std::move(k), std::move(v));
+        .def("set", [](AttrSet<>& self, const std::string& k, const AttrValue<>& v) {
+            self.set(k, std::move(v));
         }, "key"_a, "value"_a, "Set attribute with AttrValue")
 
-        .def("set", [](Widget<>& self, std::string k, const std::string& v) {
-            self.set(std::move(k), v);
+        .def("set", [](AttrSet<>& self, const std::string& k, const std::string& v) {
+            self.set(k, v);
         }, "key"_a, "value"_a, "Set attribute with string")
 
-        .def("set", [](Widget<>& self, std::string k, std::int64_t v) {
-            self.set(std::move(k), AttrValue<>(v));
+        .def("set", [](AttrSet<>& self, const std::string& k, std::int64_t v) {
+            self.set(k, AttrValue<>(v));
         }, "key"_a, "value"_a, "Set attribute with int64")
 
-        .def("set", [](Widget<>& self, std::string k, double v) {
-            self.set(std::move(k), AttrValue<>(v));
+        .def("set", [](AttrSet<>& self, const std::string& k, double v) {
+            self.set(k, AttrValue<>(v));
         }, "key"_a, "value"_a, "Set attribute with double")
 
-        .def("set", [](Widget<>& self, std::string k, const std::vector<std::int64_t>& v) {
-            self.set(std::move(k), AttrValue<>(v));
+        .def("set", [](AttrSet<>& self, const std::string& k, const std::vector<std::int64_t>& v) {
+            self.set(k, v);
         }, "key"_a, "value"_a, "Set attribute with int64 list")
 
-        .def("set", [](Widget<>& self, std::string k, const std::vector<double>& v) {
-            self.set(std::move(k), AttrValue<>(v));
+        .def("set", [](AttrSet<>& self, const std::string& k, const std::vector<double>& v) {
+            self.set(k, v);
         }, "key"_a, "value"_a, "Set attribute with double list")
 
         // Get and contains
-        .def("contains", &Widget<>::contains, "key"_a, "Check if key exists")
+        .def("contains", &AttrSet<>::contains, "key"_a, "Check if key exists")
 
-        .def("get", nb::overload_cast<const std::string&>(&Widget<>::get),
+        .def("get", nb::overload_cast<const std::string&>(&AttrSet<>::get),
              "key"_a,
              nb::rv_policy::reference_internal,
              "Get attribute value (returns None if not found)")
 
-        .def("get", nb::overload_cast<const std::string&>(&Widget<>::get, nb::const_),
+        .def("get", nb::overload_cast<const std::string&>(&AttrSet<>::get, nb::const_),
              "key"_a,
              nb::rv_policy::reference_internal,
              "Get attribute value (const, returns None if not found)")
 
-        // Children management
-        .def("add_child", &Widget<>::add_child, "widget"_a,
-             nb::rv_policy::reference_internal,
-             "Add child widget and return reference to it")
-
-        .def("children", nb::overload_cast<>(&Widget<>::children),
-             nb::rv_policy::reference_internal,
-             "Get children list (mutable)")
-
-        .def("children", nb::overload_cast<>(&Widget<>::children, nb::const_),
-             nb::rv_policy::reference_internal,
-             "Get children list (const)")
-
-        .def("child", nb::overload_cast<std::size_t>(&Widget<>::child),
-             "index"_a,
-             nb::rv_policy::reference_internal,
-             "Get child by index (mutable)")
-
-        .def("child", nb::overload_cast<std::size_t>(&Widget<>::child, nb::const_),
-             "index"_a,
-             nb::rv_policy::reference_internal,
-             "Get child by index (const)")
-
         // Python dict-like interface
-        .def("__getitem__", [](Widget<>& self, const std::string& key) -> AttrValue<>& {
+        .def("__getitem__", [](AttrSet<>& self, const std::string& key) -> AttrValue<>& {
             auto* val = self.get(key);
             if (!val) throw nb::key_error(key.c_str());
             return *val;
         }, "key"_a, nb::rv_policy::reference_internal)
 
-        .def("__setitem__", [](Widget<>& self, std::string key, nb::object value) {
+        .def("__setitem__", [](AttrSet<>& self, const std::string& key, const nb::object& value) {
             // Try to determine type from Python object
             if (nb::isinstance<nb::str>(value)) {
                 self.set(std::move(key), nb::cast<std::string>(value));
@@ -258,7 +226,52 @@ NB_MODULE(jsc_common, m) {
             }
         }, "key"_a, "value"_a)
 
-        .def("__contains__", &Widget<>::contains, "key"_a)
+        .def("__iter__", [](const AttrSet<>& self){
+                return nb::make_key_iterator(nb::type<AttrSet<>>(), "key_iterator", self.begin(), self.end());
+        }, nb::keep_alive<0, 1>())
+        .def("items", [](const AttrSet<>& self){
+                return nb::make_iterator(nb::type<AttrSet<>>(), "item_iterator", self.begin(), self.end());
+        }, nb::keep_alive<0, 1>())
+        .def("values", [](const AttrSet<>& self){
+                return nb::make_value_iterator(nb::type<AttrSet<>>(), "value_iterator", self.begin(), self.end());
+        }, nb::keep_alive<0, 1>())
+
+        .def("__contains__", &AttrSet<>::contains, "key"_a);
+
+    // Bind Widget class
+    nb::class_<Widget<>, AttrSet<>>(m, "Widget")
+        // Constructors
+        .def(nb::init<>(), "Default constructor")
+        .def(nb::init<const std::string&>(), "name"_a, "Construct with name")
+
+        // Name access
+        .def_prop_rw("name",
+            nb::overload_cast<>(&Widget<>::name, nb::const_),
+            nb::overload_cast<>(&Widget<>::name),
+            "Widget name")
+
+        // Children management
+        .def("add_child", &Widget<>::add_child, "widget"_a,
+             nb::rv_policy::reference_internal,
+             "Add child widget and return reference to it")
+
+        .def("children", nb::overload_cast<>(&Widget<>::children),
+             nb::rv_policy::reference_internal,
+             "Get children list (mutable)")
+
+        .def("children", nb::overload_cast<>(&Widget<>::children, nb::const_),
+             nb::rv_policy::reference_internal,
+             "Get children list (const)")
+
+        .def("child", nb::overload_cast<std::size_t>(&Widget<>::child),
+             "index"_a,
+             nb::rv_policy::reference_internal,
+             "Get child by index (mutable)")
+
+        .def("child", nb::overload_cast<std::size_t>(&Widget<>::child, nb::const_),
+             "index"_a,
+             nb::rv_policy::reference_internal,
+             "Get child by index (const)")
 
         .def("__len__", [](const Widget<>& self) {
             return self.children().size();
@@ -270,7 +283,7 @@ NB_MODULE(jsc_common, m) {
         });
 
     // Bind Node class
-    nb::class_<Node<>>(m, "Node")
+    nb::class_<Node<>, AttrSet<>>(m, "Node")
         // Constructors
         .def(nb::init<>(), "Default constructor")
         .def(nb::init<const std::string&>(), "name"_a, "Construct with name")
@@ -294,82 +307,18 @@ NB_MODULE(jsc_common, m) {
              nb::rv_policy::reference_internal,
              "Get widget (const)")
 
-        // Set methods (same as Widget)
-        .def("set", [](Node<>& self, std::string k, AttrValue<> v) {
-            self.set(std::move(k), std::move(v));
-        }, "key"_a, "value"_a, "Set attribute with AttrValue")
-
-        .def("set", [](Node<>& self, std::string k, const std::string& v) {
-            self.set(std::move(k), v);
-        }, "key"_a, "value"_a, "Set attribute with string")
-
-        .def("set", [](Node<>& self, std::string k, std::int64_t v) {
-            self.set(std::move(k), AttrValue<>(v));
-        }, "key"_a, "value"_a, "Set attribute with int64")
-
-        .def("set", [](Node<>& self, std::string k, double v) {
-            self.set(std::move(k), AttrValue<>(v));
-        }, "key"_a, "value"_a, "Set attribute with double")
-
-        .def("set", [](Node<>& self, std::string k, const std::vector<std::int64_t>& v) {
-            self.set(std::move(k), AttrValue<>(v));
-        }, "key"_a, "value"_a, "Set attribute with int64 list")
-
-        .def("set", [](Node<>& self, std::string k, const std::vector<double>& v) {
-            self.set(std::move(k), AttrValue<>(v));
-        }, "key"_a, "value"_a, "Set attribute with double list")
-
-        // Get and contains
-        .def("contains", &Node<>::contains, "key"_a, "Check if key exists")
-
-        .def("get", nb::overload_cast<const std::string&>(&Node<>::get),
-             "key"_a,
-             nb::rv_policy::reference_internal,
-             "Get attribute value (returns None if not found)")
-
-        .def("get", nb::overload_cast<const std::string&>(&Node<>::get, nb::const_),
-             "key"_a,
-             nb::rv_policy::reference_internal,
-             "Get attribute value (const, returns None if not found)")
-
-        // Python dict-like interface
-        .def("__getitem__", [](Node<>& self, const std::string& key) -> AttrValue<>& {
-            auto* val = self.get(key);
-            if (!val) throw nb::key_error(key.c_str());
-            return *val;
-        }, "key"_a, nb::rv_policy::reference_internal)
-
-        .def("__setitem__", [](Node<>& self, std::string key, nb::object value) {
-            // Same type handling as Widget
-            if (nb::isinstance<nb::str>(value)) {
-                self.set(std::move(key), nb::cast<std::string>(value));
-            } else if (nb::isinstance<nb::int_>(value)) {
-                self.set(std::move(key), AttrValue<>(nb::cast<std::int64_t>(value)));
-            } else if (nb::isinstance<nb::float_>(value)) {
-                self.set(std::move(key), AttrValue<>(nb::cast<double>(value)));
-            } else if (nb::isinstance<AttrValue<>>(value)) {
-                self.set(std::move(key), nb::cast<AttrValue<>>(value));
-            } else if (nb::isinstance<nb::list>(value) || nb::isinstance<nb::tuple>(value)) {
-                try {
-                    auto vec = nb::cast<std::vector<std::int64_t>>(value);
-                    self.set(std::move(key), vec);
-                    return;
-                } catch (...) {}
-                try {
-                    auto vec = nb::cast<std::vector<double>>(value);
-                    self.set(std::move(key), vec);
-                    return;
-                } catch (...) {
-                    throw nb::type_error("List must contain all ints or all floats");
-                }
-            } else {
-                throw nb::type_error("Unsupported value type");
-            }
-        }, "key"_a, "value"_a)
-
-        .def("__contains__", &Node<>::contains, "key"_a)
-
         .def("__repr__", [](const Node<>& self) {
             return "Node(name='" + self.name() + "')";
+        });
+
+
+    // Bind Hyperlink class
+    nb::class_<Hyperlink<>, AttrSet<>>(m, "Hyperlink")
+        // Constructors
+        .def(nb::init<>(), "Default constructor")
+        .def(nb::init<std::size_t, std::size_t>(), "from"_a, "to"_a, "Construct with internal node ids")
+
+        .def("__repr__", [](const Widget<>& self) {
+            return "Hyperlink()";
         });
 }

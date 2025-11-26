@@ -78,9 +78,23 @@ public:
     uint64_t &ui64() { return reinterpret_cast<uint64_t&>(at_i64(0)); }
     double &f64() { return at_f64(0); }
 
-    int64_t &at_i64 (std::size_t i);
+    int64_t &at_i64 (std::size_t i) {
+        if (std::holds_alternative<std::array<std::int64_t,4>>(_v))
+            return std::get<std::array<std::int64_t,4>>(_v).at(i);
+        if (std::holds_alternative<std::vector<std::int64_t>>(_v))
+            return std::get<std::vector<std::int64_t>>(_v).at(i);
+        throw std::bad_variant_access{}; // The least problematic way to handle bad access
+    }
+
     uint64_t &at_ui64(std::size_t i) { return reinterpret_cast<uint64_t&>(at_i64(i)); }
-    double &at_f64 (std::size_t i);
+
+    double &at_f64 (std::size_t i) {
+        if (std::holds_alternative<std::array<double,4>>(_v))
+            return std::get<std::array<double,4>>(_v).at(i);
+        if (std::holds_alternative<std::vector<double>>(_v))
+            return std::get<std::vector<double>>(_v).at(i);
+        throw std::bad_variant_access{}; // The least problematic way to handle bad access
+    }
     
     const int64_t &at_i64 (std::size_t i) const { return const_cast<AttrValue*>(this)->at_i64(i); }
     const uint64_t &at_ui64(std::size_t i) const { return reinterpret_cast<const uint64_t&>(at_i64(i)); }
@@ -184,28 +198,12 @@ protected:
     static_assert(sizeof(AttrValue<std::string>) <= 64, "AttrValue size is not optimal for the cache line size of 64 bytes");
 #endif
 
-template <class TStr>
-int64_t &AttrValue<TStr>::at_i64(std::size_t i) {
-    if (std::holds_alternative<std::array<std::int64_t,4>>(_v))
-        return std::get<std::array<std::int64_t,4>>(_v).at(i);
-    if (std::holds_alternative<std::vector<std::int64_t>>(_v))
-        return std::get<std::vector<std::int64_t>>(_v).at(i);
-    throw std::bad_variant_access{}; // The least problematic way to handle bad access
-}
-template <class TStr>
-double &AttrValue<TStr>::at_f64(std::size_t i) {
-    if (std::holds_alternative<std::array<double,4>>(_v))
-        return std::get<std::array<double,4>>(_v).at(i);
-    if (std::holds_alternative<std::vector<double>>(_v))
-        return std::get<std::vector<double>>(_v).at(i);
-    throw std::bad_variant_access{}; // The least problematic way to handle bad access
-}
 
 
 template<class TStr = std::string>
 class AttrSet {
 public:
-    void set(const TStr& k, AttrValue<TStr>&& v) { _dyn.emplace(std::move(k), std::move(v)); }
+    void set(const TStr& k, const AttrValue<TStr>& v) { _dyn.emplace(std::move(k), std::move(v)); }
     void set(const TStr& k, const TStr& v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
     void set(const TStr& k, std::initializer_list<std::int64_t> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
     void set(const TStr& k, std::initializer_list<double> v) { _dyn.emplace(std::move(k), AttrValue<TStr>(v)); }
@@ -215,6 +213,14 @@ public:
     bool contains(const TStr& k) const { return _dyn.find(k) != _dyn.end(); }
     AttrValue<TStr>* get(const TStr &k) { auto it = _dyn.find(k); return it != _dyn.end() ? &it->second : nullptr; }
     const AttrValue<TStr>* get(const TStr &k) const { auto it = _dyn.find(k); return it != _dyn.end() ? &it->second : nullptr; }
+
+    const std::unordered_map<TStr, AttrValue<TStr>> attrs_map() const { return _dyn; }
+    std::unordered_map<TStr, AttrValue<TStr>> attrs_map() { return _dyn; }
+    template<class F>
+    void each(F func) const { for (const auto& v : _dyn) { func(v.first, v.second); } }
+
+    auto begin() const { return _dyn.cbegin(); }
+    auto end() const { return _dyn.cend(); }
 
 protected:
     std::unordered_map<TStr, AttrValue<TStr>> _dyn;
@@ -264,7 +270,7 @@ protected:
 template <class TStr = std::string>
 class Hyperlink : public AttrSet<TStr> {
 public:
-    Hyperlink(std::size_t from_id = 0, std::size_t to_id = 0)
+    Hyperlink(std::size_t from_id = std::numeric_limits<std::size_t>::max(), std::size_t to_id = std::numeric_limits<std::size_t>::max())
         : _from(from_id), _to(to_id) {}
 
     std::size_t _id_from() const { return _from; }
