@@ -316,7 +316,7 @@ NB_MODULE(jsc_common, m) {
     nb::class_<Hyperlink<>, AttrSet<>>(m, "Hyperlink")
         // Constructors
         .def(nb::init<>(), "Default constructor")
-        .def(nb::init<std::size_t, std::size_t>(), "from"_a, "to"_a, "Construct with internal node ids")
+        .def(nb::init<Node<>, Node<>>(), "from"_a, "to"_a, "Construct with internal node ids")
 
         .def("__repr__", [](const Widget<>& self) {
             return "Hyperlink()";

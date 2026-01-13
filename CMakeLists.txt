@@ -26,7 +26,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/external/nanobind)
 
 # Common library
 
-set(COMMON_FILES lib/graph.h)
+set(COMMON_FILES lib/common.h lib/graph.h)
 
 add_library(common INTERFACE ${COMMON_FILES})
 target_include_directories(common INTERFACE lib) # Include common headers

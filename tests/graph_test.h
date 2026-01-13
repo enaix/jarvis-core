@@ -8,6 +8,7 @@ inline bool test_graph_init()
     using namespace jsc;
     std::cout << "test_graph_init()" << std::endl;
 
+    AdjGraph<std::string> g;
     Node<std::string> topic("Topic A");
     Widget<std::string> w("Widget 1");
     
