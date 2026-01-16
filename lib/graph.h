@@ -245,7 +245,7 @@ protected:
 template <class TStr = std::string>
 class Widget : public AttrSet<TStr> {
 public:
-    explicit Widget(const TStr &n = {}) : _name(n) {}
+    explicit Widget(const TStr &n = {}) : _name(n), _id(std::numeric_limits<std::size_t>::max()) {}
 
     Widget &add_child(const Widget& w) { _children.emplace_back(std::move(w)); return _children.back(); }
     const std::vector<Widget>& children() const { return _children; }
@@ -255,8 +255,13 @@ public:
 
     const TStr& name() const { return _name; }
     TStr& name() { return _name; }
+
+    std::size_t _hyperlink_id() const { return _id; }
+    void _set_hyperlink_id(std::size_t new_id) { _id = new_id; }
+
 protected:
     TStr _name;
+    std::size_t _id;  // Sequential id of the widget in a node. Only exists for widgets with hyperlinks
     std::vector<Widget> _children;
 };
 
@@ -264,7 +269,7 @@ protected:
 template <class TStr = std::string>
 class Node : public AttrSet<TStr> {
 public:
-    explicit Node(const TStr &n = {}) : _id(std::numeric_limits<std::size_t>::max()), _name(n) {}
+    explicit Node(const TStr &n = {}) : _id(std::numeric_limits<std::size_t>::max()), _name(n), _widget_hl_cnt(0) {}
 
     /*Widget<TStr>& set_widget(Widget<TStr> w) { _widget = std::move(w); return _widget; }
     const Widget<TStr>& widget() const { return _widget; }
@@ -275,27 +280,41 @@ public:
 
     std::size_t _internal_id() const { return _id; }
     void _set_internal_id(std::size_t new_id) { _id = new_id; } // TODO do we need to store ids?
+
+    std::size_t _widget_hyperlinks_cnt() const { return _widget_hl_cnt; }
+    void _set_widget_hyperlinks_cnt(std::size_t new_cnt) { _widget_hl_cnt = new_cnt; }
 protected:
-    std::size_t _id;
     TStr _name;
-    Widget<TStr> _widget;
+    //Widget<TStr> _widget;
+    std::size_t _id; // Sequential id of a node in a graph
+
+    // Temporary fields
+    std::size_t _widget_hl_cnt; // Used for assigning widget hyperlinks ids
 };
 
 
 template <class TStr = std::string>
 class Hyperlink : public AttrSet<TStr> {
 public:
-    Hyperlink() : _from(std::numeric_limits<std::size_t>::max()), _to(std::numeric_limits<std::size_t>::max()) {}
-    Hyperlink(const Node<TStr>& from, const Node<TStr>& to) : _from(from._internal_id()), _to(to._internal_id()) {}
+    Hyperlink() : _from(std::numeric_limits<std::size_t>::max()), _to(std::numeric_limits<std::size_t>::max()), _widget(std::numeric_limits<std::size_t>::max()) {}
+    Hyperlink(Node<TStr>& from, const Node<TStr>& to, Widget<TStr>& widget) : _from(from._internal_id()), _to(to._internal_id()) {
+        // Assign widget id
+        std::size_t cnt = from._widget_hyperlinks_cnt();
+        widget._set_hyperlink_id(cnt);
+        _widget = cnt;
+        from._set_widget_hyperlinks_cnt(cnt + 1);
+    }
 
     std::size_t _id_from() const { return _from; }
     std::size_t _id_to() const { return _to; } // TODO do we need to store ids?
+    std::size_t _widget_id() const { return _widget; }
 
     // TODO add linked widget and operator== for explicit comparisons. We may need to implement unique ids for describing multigraphs
 
 protected:
     std::size_t _from;
     std::size_t _to;
+    std::size_t _widget; // linked widget id
 };
 
 
@@ -314,17 +333,36 @@ protected:
 
 class EdgeRef {
 public:
-    EdgeRef() : _from(std::numeric_limits<std::size_t>::max()), _to(std::numeric_limits<std::size_t>::max()) {}
-    EdgeRef(std::size_t from, std::size_t to) : _from(from), _to(to) {}
+    EdgeRef() : _from(std::numeric_limits<std::size_t>::max()), _to(std::numeric_limits<std::size_t>::max()), _widget(std::numeric_limits<std::size_t>::max()) {}
+    EdgeRef(std::size_t from, std::size_t to, std::size_t widget_id) : _from(from), _to(to), _widget(widget_id) {}
     template<class TStr>
-    EdgeRef(const Hyperlink<TStr>& edge) : _from(edge._id_from()), _to(edge._id_to()) {}
+    EdgeRef(const Hyperlink<TStr>& edge) : _from(edge._id_from()), _to(edge._id_to()), _widget(edge._widget()) {}
 
     std::size_t _id_from() const { return _from; }
     std::size_t _id_to() const { return _to; }
+    std::size_t _widget_id() const { return _widget; }
 
 protected:
     std::size_t _from;
     std::size_t _to;
+    std::size_t _widget;  // linked widget number
+};
+
+
+class WidgetRef {
+public:
+    WidgetRef() : _node_id(std::numeric_limits<std::size_t>::max()), _widget_id(std::numeric_limits<std::size_t>::max()) {}
+    WidgetRef(std::size_t node_id, std::size_t widget_id) : _node_id(node_id), _widget_id(widget_id) {}
+    template<class TStr>
+    WidgetRef(const Node<TStr>& node, const Widget<TStr>& widget) : _node_id(node._internal_id()), _widget_id(widget._hyperlink_id()) {}
+
+    NodeRef node_ref() const { return NodeRef(_node_id); }
+    std::size_t _node_internal_id() const { return _node_id; }
+    std::size_t _hyperlink_id() const { return _widget_id; }
+
+protected:
+    std::size_t _node_id;
+    std::size_t _widget_id;
 };
 
 
@@ -342,9 +380,19 @@ public:
     // =======
 
     /**
+     * @brief Get the node by its reference. May be invalidated after insertion
+     */
+    Node<TStr>& get_node(const NodeRef& node)
+    {
+        if (node._internal_id() == std::numeric_limits<std::size_t>::max()) [[unlikely]]
+            throw std::invalid_argument{}; // The node does not exist
+        return std::get<0>(data[node._internal_id()]);
+    }
+
+    /**
      * @brief Get the root widget of a node. May be invalidated after insertion
      */
-    Widget<TStr>& widget(const NodeRef& node)
+    Widget<TStr>& get_widget(const NodeRef& node)
     {
         if (node._internal_id() == std::numeric_limits<std::size_t>::max()) [[unlikely]]
             throw std::invalid_argument{}; // The node does not exist
@@ -352,9 +400,23 @@ public:
     }
 
     /**
+     * @brief Get the widget by its reference. May be invalidated after insertion
+     */
+    Widget<TStr>& get_widget(const WidgetRef& widget)
+    {
+        if (widget._node_internal_id() == std::numeric_limits<std::size_t>::max() || widget._hyperlink_id() == std::numeric_limits<std::size_t>::max()) [[unlikely]]
+            throw std::invalid_argument{}; // The node does not exist
+        Widget<TStr>* wid = find_widget_in_node(get_node(widget.node_ref())); // Not implemented
+        if (!wid) {
+            throw std::invalid_argument{}; // Not found
+        }
+        return wid;
+    }
+
+    /**
      * @brief Get the starting (edge.from) node of the edge. May be invalidated after insertion. Behavior is undefined if edge.from does not exist
      */
-    Node<TStr>& from(const EdgeRef& edge)
+    Node<TStr>& get_from(const EdgeRef& edge)
     {
         std::size_t id = edge._id_from();
         if (id == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
@@ -366,7 +428,7 @@ public:
     /**
      * @brief Get the ending (edge.to) node of the edge. May be invalidated after insertion. Behavior is undefined if edge.to does not exist
      */
-    Node<TStr>& to(const EdgeRef& edge)
+    Node<TStr>& get_to(const EdgeRef& edge)
     {
         std::size_t id = edge._id_to();
         if (id == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
@@ -381,7 +443,7 @@ public:
     /**
      * @brief Add a node to the graph. If ALWAYS_THROW_ON_ERROR, throws if the node already has an id
      */
-    const NodeRef& add_node(Node<TStr>& node, Widget<TStr>& widget)  // node is now initialized
+    const NodeRef add_node(Node<TStr>& node, Widget<TStr>& widget)  // node is now initialized
     {
         if (node._internal_id() != std::numeric_limits<std::size_t>::max()) [[unlikely]] {
             throw std::invalid_argument{}; // The node cannot be added twice
@@ -390,6 +452,14 @@ public:
         data.insert({next_id, {std::move(node), std::vector<Hyperlink<TStr>>(), std::vector<std::size_t>(), std::move(widget)}});
         next_id++;
         return NodeRef(node);
+    }
+
+    /**
+     * @brief Add a node to the graph with empty widget. If ALWAYS_THROW_ON_ERROR, throws if the node already has an id
+     */
+    const NodeRef add_node(Node<TStr>& node)  // node is now initialized
+    {
+        return add_node(node, Widget<TStr>());
     }
 
     /**
@@ -438,10 +508,10 @@ public:
     /**
      * @brief Add a new edge to the graph and returns the reference to the created edge. May be invalidated after insertion. Behavior is undefined if edge.from or edge.to do not exist
      */
-    EdgeRef add_edge(Hyperlink<TStr>& edge)
+    const EdgeRef add_edge(Hyperlink<TStr>& edge)
     {
-        std::size_t from = edge._id_from(), to = edge._id_to();
-        if (from == std::numeric_limits<std::size_t>::max() || to == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
+        std::size_t from = edge._id_from(), to = edge._id_to(), wid = edge._widget_id();
+        if (from == std::numeric_limits<std::size_t>::max() || to == std::numeric_limits<std::size_t>::max() || wid == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
             throw std::invalid_argument{}; // The node is uninitialized
         }
 
@@ -454,22 +524,23 @@ public:
     /**
      * @brief Delete a single edge in the multigraph. Behavior is undefined if edge.from does not exist
      */
-    bool del_edge(const Hyperlink<TStr>& edge)
+    bool del_edge(const EdgeRef& edge)
     {
-        std::size_t from = edge._id_from(), to = edge._id_to();
-        if (from == std::numeric_limits<std::size_t>::max() || to == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
+        std::size_t from = edge._id_from(), to = edge._id_to(), wid = edge._widget_id();
+        if (from == std::numeric_limits<std::size_t>::max() || to == std::numeric_limits<std::size_t>::max() || wid == std::numeric_limits<std::size_t>::max()) [[unlikely]] {
 #ifdef ALWAYS_THROW_ON_ERROR
             throw std::invalid_argument{}; // The node is uninitialized
 #else
             return false;
 #endif
         }
-        auto& edges = std::get<1>(data[from]);
+        auto& node_data = data[from];
+        auto& edges = std::get<1>(node_data);
 
         // Iterate over all links between from->to and perform deletion
         bool found = false;
         for (auto it = edges.begin(); it != edges.end(); it++) {
-            if (*it == edge) { // TODO implement explicit operator== for edges, right now it's ambiguous for multigraphs
+            if (*it == edge) { // TODO implement explicit operator== for edges
                 edges.erase(it);
                 found = true;
                 break;
@@ -482,6 +553,19 @@ public:
             return false;
 #endif
         }
+
+        // We need to unset the widget hyperlink id
+        const Node<TStr>& node_from = std::get<0>(node_data);
+        Widget<TStr>* widget = find_widget_in_node(node_from, wid);
+
+        if (!widget) {
+#ifdef ALWAYS_THROW_ON_ERROR
+            throw std::out_of_range{}; // The edge does not exist
+#else
+            return false;
+#endif
+        }
+        widget->_set_hyperlink_id(std::numeric_limits<std::size_t>::max());
 
         // In a multigraph we would have n backlinks, so we would need to delete exactly one
         auto& backlinks = std::get<2>(data[to]);
@@ -498,6 +582,15 @@ public:
         internal_err("adjgraph_missing_backlinks", __FILE__, __LINE__);
         }
     }
+
+protected:
+    Widget<TStr>& find_widget_in_node(const Node<TStr>& node, std::size_t widget_id)
+    {
+        // TODO implement node search
+        abort();
+        return Widget<TStr>();
+    }
+
 protected:
     // We can theoretically use a vector, but insertions would be not O(1)
     std::unordered_map<std::size_t, std::tuple<Node<TStr>, std::vector<Hyperlink<TStr>>, std::vector<std::size_t>, Widget<TStr>>> data; // TODO use a small vector for backlinks
