@@ -3,34 +3,16 @@
 
 from __future__ import annotations
 
-import html
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
 
-PathLikeOrText = Union[str, Path]
-AXTreeInput = Union[PathLikeOrText, List[Dict[str, Any]], Dict[str, Any]]
-
-
-def _read_text(path_or_text: PathLikeOrText) -> str:
-    p = Path(path_or_text)
-    if p.exists():
-        return p.read_text(encoding="utf-8", errors="ignore")
-    return str(path_or_text)
-
-
-def _load_json_any(path_or_obj: Union[PathLikeOrText, Any]) -> Any:
-    """Load JSON if path/str provided, otherwise return object as-is."""
-    if isinstance(path_or_obj, (dict, list)):
-        return path_or_obj
-    txt = _read_text(path_or_obj)
-    return json.loads(txt)
+AXTreeInput = Union[List[Dict[str, Any]], Dict[str, Any]]
 
 
 def _norm(s: str) -> str:
@@ -44,20 +26,17 @@ def _get_axtree_nodes(axtree: AXTreeInput) -> List[Dict[str, Any]]:
     Accepts:
       - list of AX nodes
       - dict with key "nodes"
-      - path to json that is either list or dict-with-nodes
     Returns: list of node dicts
     """
-    data = _load_json_any(axtree)
+    if isinstance(axtree, list):
+        return axtree
 
-    if isinstance(data, list):
-        return data
-
-    if isinstance(data, dict):
-        nodes = data.get("nodes")
+    if isinstance(axtree, dict):
+        nodes = axtree.get("nodes")
         if isinstance(nodes, list):
             return nodes
 
-    raise TypeError("Unsupported AXTree format. Expected list, dict-with-'nodes', or path to JSON.")
+    raise TypeError("Unsupported AXTree format. Expected list or dict-with-'nodes'.")
 
 
 def _build_id_text_map(soup: BeautifulSoup) -> Dict[str, str]:
@@ -145,37 +124,6 @@ def extract_html_anchors_from_text(
         )
     return anchors
 
-def extract_html_anchors(
-    html_path_or_text: PathLikeOrText,
-    base_url: Optional[str] = None,
-    parser: str = "html.parser",  # no lxml required
-) -> List[AnchorInfo]:
-    """Extract all <a> in DOM order with best-effort accessible names."""
-    html = _read_text(html_path_or_text)
-    soup = BeautifulSoup(html, parser)
-    id_text = _build_id_text_map(soup)
-
-    anchors: List[AnchorInfo] = []
-    for a in soup.find_all("a"):
-        href_attr = a.get("href")
-        href_raw = "" if href_attr is None else str(href_attr)
-
-        href_resolved = href_raw
-        if base_url:
-            href_resolved = urljoin(base_url, href_raw)
-
-        name = _accessible_name_for_anchor(a, id_text)
-        anchors.append(
-            AnchorInfo(
-                name=name,
-                name_norm=_norm(name),
-                href_raw=href_raw,
-                href_resolved=href_resolved,
-            )
-        )
-    return anchors
-
-
 @dataclass
 class AXLinkNode:
     backendDOMNodeId: int
@@ -213,29 +161,11 @@ def extract_axtree_link_nodes(axtree: AXTreeInput) -> List[AXLinkNode]:
     return out
 
 
-def _score(ax_name_norm: str, html_name_norm: str) -> int:
-    """
-    Simple score (no extra deps):
-      100 exact match
-       60 substring match
-        0 otherwise
-    """
-    if not ax_name_norm or not html_name_norm:
-        return 0
-    if ax_name_norm == html_name_norm:
-        return 100
-    if ax_name_norm in html_name_norm or html_name_norm in ax_name_norm:
-        return 60
-    return 0
-
-
 def map_axtree_links_to_html_hrefs(
     axtree: AXTreeInput,
-    html: PathLikeOrText,
+    html: str,
     base_url: Optional[str] = None,
     resolve_urls: bool = True,
-    min_score: int = 60,
-    lookahead: int = 120,
     parser: str = "html.parser",
 ) -> Dict[int, Dict[str, str]]:
     ax_links = extract_axtree_link_nodes(axtree)
@@ -249,51 +179,33 @@ def map_axtree_links_to_html_hrefs(
     used = [False] * len(anchors)
     out: Dict[int, Dict[str, str]] = {}
 
-    # Pointer used only for fallback monotonic search
-    j = 0
-
     for ax in ax_links:
         href = ""
         matched_html_name: Optional[str] = None
-        best_sc = -1
         best_k: Optional[int] = None
 
-        # 1) Exact match by name (global, not limited by j/lookahead)
+        # Exact match by name (global)
         cand_indices = name_to_indices.get(ax.name_norm, [])
         for k in cand_indices:
             if not used[k]:
                 best_k = k
-                best_sc = 100
                 break
 
-        # 2) Fallback: monotonic window search (substring match)
-        if best_k is None:
-            end = min(len(anchors), j + lookahead)
-            for k in range(j, end):
-                if used[k]:
-                    continue
-                sc = _score(ax.name_norm, anchors[k].name_norm)
-                if sc > best_sc:
-                    best_sc = sc
-                    best_k = k
-                    if sc == 100:
-                        break
-
-        # Commit match
-        if best_k is not None and best_sc >= min_score:
+        # Commit match (exact only)
+        if best_k is not None:
             used[best_k] = True
-            # advance pointer only if we matched at/after current pointer
-            if best_k >= j:
-                j = best_k + 1
             href = anchors[best_k].href_resolved if resolve_urls else anchors[best_k].href_raw
             matched_html_name = anchors[best_k].name
+            score = 100
+        else:
+            score = 0
 
         out[ax.backendDOMNodeId] = {
             "nodeId": ax.nodeId,
             "href": href,
             "ax_name": ax.name,
             "matched_html_name": matched_html_name,
-            "score": str(best_sc),
+            "score": str(score),
         }
 
     return out
@@ -326,7 +238,6 @@ def assert_mapping_quality(
     *,
     require_href: bool = True,
     require_matched_html_name: bool = True,
-    min_score: int = 60,
     max_bad: int = 0,
     dump_path: str | None = None,
     show_examples: int = 10,
@@ -337,7 +248,6 @@ def assert_mapping_quality(
     Checks (configurable):
       - matched_html_name is not None
       - href is not empty
-      - score >= min_score
 
     Raises AssertionError if number of bad entries > max_bad.
     Optionally dumps bad entries to JSON.
@@ -348,20 +258,11 @@ def assert_mapping_quality(
         href = rec.get("href", "")
         matched_name = rec.get("matched_html_name", None)
 
-        # score may be stored as str in your mapping; normalize to int
-        score_raw = rec.get("score", -1)
-        try:
-            score = int(score_raw)
-        except (TypeError, ValueError):
-            score = -1
-
         fails = []
         if require_matched_html_name and matched_name is None:
             fails.append("matched_html_name=None")
         if require_href and not href:
             fails.append("href=''")
-        if score < min_score:
-            fails.append(f"score<{min_score} (score={score})")
 
         if fails:
             bad[backend_id] = {**rec, "_fails": fails}
