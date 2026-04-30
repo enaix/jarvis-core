@@ -13,28 +13,11 @@ st.set_page_config(page_title="AXTree Annotator", layout="wide")
 
 DEFAULT_CANDIDATES_PATH = r"notebooks\webui\output\candidate\candidates.jsonl"
 DEFAULT_LABELS_PATH = r"notebooks\webui\annotator\output\labels.jsonl"
+DEFAULT_PAGE_FLAGS_PATH = r"notebooks\webui\annotator\output\page_flags.jsonl"
 DEFAULT_DATASET_ROOT = r"C:\Users\70133\.cache\huggingface\hub\datasets--biglab--webui-7k\snapshots\60f7b3c4b9409f75551664adc1564625dfc33c2e\dataset1"
 
 
 def load_jsonl(path: str):
-    file_path = Path(path)
-    if not file_path.exists():
-        raise FileNotFoundError(f"File not found: {file_path}")
-
-    rows = []
-    with file_path.open("r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"JSON decode error at line {line_num}: {e}") from e
-    return rows
-
-
-def load_labels(path: str):
     file_path = Path(path)
     if not file_path.exists():
         return []
@@ -48,8 +31,16 @@ def load_labels(path: str):
             try:
                 rows.append(json.loads(line))
             except json.JSONDecodeError as e:
-                raise ValueError(f"Labels JSON decode error at line {line_num}: {e}") from e
+                raise ValueError(f"JSON decode error at line {line_num} in {file_path}: {e}") from e
     return rows
+
+
+def write_jsonl(path: str, rows: list[dict]):
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def append_jsonl(path: str, row: dict):
@@ -59,24 +50,39 @@ def append_jsonl(path: str, row: dict):
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def make_key(page_id, node_id):
-    return f"{page_id}::{node_id}"
+def make_candidate_key(page_id, node_id):
+    return f"{str(page_id)}::{str(node_id)}"
 
 
-def labels_to_lookup(labels):
+def build_labeled_lookup(label_rows):
     lookup = {}
-    for row in labels:
-        key = make_key(row.get("page_id"), row.get("node_id"))
+    for row in label_rows:
+        key = make_candidate_key(row.get("page_id"), row.get("node_id"))
         lookup[key] = row
     return lookup
 
 
-def compute_unlabeled_indices(candidates, label_lookup):
+def build_bad_pages_set(page_rows):
+    bad_pages = set()
+    for row in page_rows:
+        if row.get("page_action") == "bad_page":
+            bad_pages.add(str(row.get("page_id")))
+    return bad_pages
+
+
+def compute_visible_indices(candidates, labeled_lookup, bad_pages):
     indices = []
     for i, row in enumerate(candidates):
-        key = make_key(row.get("page_id"), row.get("node_id"))
-        if key not in label_lookup:
-            indices.append(i)
+        page_id = str(row.get("page_id"))
+        node_id = row.get("node_id")
+        key = make_candidate_key(page_id, node_id)
+
+        if key in labeled_lookup:
+            continue
+        if page_id in bad_pages:
+            continue
+
+        indices.append(i)
     return indices
 
 
@@ -169,7 +175,6 @@ def make_scrollable_bbox_html(
 
         function scrollToBBox() {{
             if (!container || !svg) return;
-
             const displayedWidth = svg.clientWidth;
             if (!displayedWidth) return;
 
@@ -180,6 +185,7 @@ def make_scrollable_bbox_html(
 
         setTimeout(scrollToBBox, 80);
         setTimeout(scrollToBBox, 250);
+        setTimeout(scrollToBBox, 500);
         window.addEventListener("load", scrollToBBox);
         window.addEventListener("resize", scrollToBBox);
     }})();
@@ -188,135 +194,335 @@ def make_scrollable_bbox_html(
     return html
 
 
-def get_current_unlabeled_candidate():
-    unlabeled_indices = st.session_state.get("unlabeled_indices", [])
-    cursor = st.session_state.get("cursor", 0)
+def get_row(data_index):
+    data = st.session_state.get("data", [])
+    if data_index is None:
+        return None
+    if data_index < 0 or data_index >= len(data):
+        return None
+    return data[data_index]
+
+
+def refresh_state():
+    data = st.session_state.get("data", [])
+    label_rows = load_jsonl(st.session_state["labels_path"])
+    page_rows = load_jsonl(st.session_state["page_flags_path"])
+
+    st.session_state["label_rows"] = label_rows
+    st.session_state["page_rows"] = page_rows
+    st.session_state["labeled_lookup"] = build_labeled_lookup(label_rows)
+    st.session_state["bad_pages"] = build_bad_pages_set(page_rows)
+    st.session_state["visible_indices"] = compute_visible_indices(
+        data,
+        st.session_state["labeled_lookup"],
+        st.session_state["bad_pages"],
+    )
+
+
+def find_first_visible():
+    visible = st.session_state.get("visible_indices", [])
+    return visible[0] if visible else None
+
+
+def find_prev_index(current_index):
+    if current_index is None:
+        return None
+    return current_index - 1 if current_index > 0 else 0
+
+
+def find_next_index(current_index):
+    data = st.session_state.get("data", [])
+    if current_index is None:
+        return 0 if data else None
+    if current_index < len(data) - 1:
+        return current_index + 1
+    return len(data) - 1 if data else None
+
+
+def find_next_visible_different_page(current_index):
+    current_row = get_row(current_index)
+    if current_row is None:
+        return None
+
+    current_page_id = str(current_row.get("page_id"))
+    visible = st.session_state.get("visible_indices", [])
     data = st.session_state.get("data", [])
 
-    if not unlabeled_indices:
-        return None, None
+    for idx in visible:
+        if idx <= current_index:
+            continue
+        row = data[idx]
+        if str(row.get("page_id")) != current_page_id:
+            return idx
 
-    cursor = max(0, min(cursor, len(unlabeled_indices) - 1))
-    st.session_state["cursor"] = cursor
+    for idx in visible:
+        row = data[idx]
+        if str(row.get("page_id")) != current_page_id:
+            return idx
 
-    data_index = unlabeled_indices[cursor]
-    return data_index, data[data_index]
-
-
-def refresh_unlabeled_indices():
-    data = st.session_state.get("data", [])
-    labels_lookup = st.session_state.get("labels_lookup", {})
-    old_data_index, _ = get_current_unlabeled_candidate()
-
-    unlabeled_indices = compute_unlabeled_indices(data, labels_lookup)
-    st.session_state["unlabeled_indices"] = unlabeled_indices
-
-    if not unlabeled_indices:
-        st.session_state["cursor"] = 0
-        return
-
-    if old_data_index is None:
-        st.session_state["cursor"] = 0
-        return
-
-    next_cursor = 0
-    for pos, idx in enumerate(unlabeled_indices):
-        if idx >= old_data_index:
-            next_cursor = pos
-            break
-    else:
-        next_cursor = len(unlabeled_indices) - 1
-
-    st.session_state["cursor"] = next_cursor
-
-
-def go_next():
-    unlabeled_indices = st.session_state.get("unlabeled_indices", [])
-    if unlabeled_indices and st.session_state["cursor"] < len(unlabeled_indices) - 1:
-        st.session_state["cursor"] += 1
+    return None
 
 
 def go_prev():
-    unlabeled_indices = st.session_state.get("unlabeled_indices", [])
-    if unlabeled_indices and st.session_state["cursor"] > 0:
-        st.session_state["cursor"] -= 1
+    prev_idx = find_prev_index(st.session_state.get("current_data_index"))
+    if prev_idx is not None:
+        st.session_state["current_data_index"] = prev_idx
 
 
-def save_label(label_value: str):
-    labels_path = st.session_state["labels_path"]
-    data_index, row = get_current_unlabeled_candidate()
+def go_next():
+    next_idx = find_next_index(st.session_state.get("current_data_index"))
+    if next_idx is not None:
+        st.session_state["current_data_index"] = next_idx
+
+
+def current_candidate_label():
+    row = get_row(st.session_state.get("current_data_index"))
+    if row is None:
+        return None
+    key = make_candidate_key(row.get("page_id"), row.get("node_id"))
+    return st.session_state.get("labeled_lookup", {}).get(key)
+
+
+def current_page_is_bad():
+    row = get_row(st.session_state.get("current_data_index"))
+    if row is None:
+        return False
+    return str(row.get("page_id")) in st.session_state.get("bad_pages", set())
+
+
+def save_candidate_label(label_value: str):
+    current_index = st.session_state.get("current_data_index")
+    row = get_row(current_index)
     if row is None:
         return
 
+    key = make_candidate_key(row.get("page_id"), row.get("node_id"))
+    if key in st.session_state.get("labeled_lookup", {}):
+        return
+
     label_row = {
-        "page_id": row.get("page_id"),
-        "node_id": row.get("node_id"),
+        "page_id": str(row.get("page_id")),
+        "node_id": str(row.get("node_id")),
         "label": label_value,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "role": row.get("role"),
         "text_len": row.get("text_len"),
     }
 
-    append_jsonl(labels_path, label_row)
+    append_jsonl(st.session_state["labels_path"], label_row)
+    refresh_state()
 
-    key = make_key(row.get("page_id"), row.get("node_id"))
-    st.session_state["labels_lookup"][key] = label_row
-    refresh_unlabeled_indices()
+    next_idx = find_next_index(current_index)
+    if next_idx is not None:
+        st.session_state["current_data_index"] = next_idx
 
 
-def load_all(candidates_path: str, labels_path: str, dataset_root: str):
-    data = load_jsonl(candidates_path)
-    labels = load_labels(labels_path)
-    labels_lookup = labels_to_lookup(labels)
-    unlabeled_indices = compute_unlabeled_indices(data, labels_lookup)
+def undo_current_label():
+    current_index = st.session_state.get("current_data_index")
+    row = get_row(current_index)
+    if row is None:
+        return
+
+    page_id = str(row.get("page_id"))
+    node_id = str(row.get("node_id"))
+    key = make_candidate_key(page_id, node_id)
+
+    label_rows = load_jsonl(st.session_state["labels_path"])
+    new_rows = []
+    removed = False
+
+    for item in label_rows:
+        item_key = make_candidate_key(item.get("page_id"), item.get("node_id"))
+        if item_key == key and not removed:
+            removed = True
+            continue
+        new_rows.append(item)
+
+    if removed:
+        write_jsonl(st.session_state["labels_path"], new_rows)
+        refresh_state()
+
+
+def mark_current_page_bad():
+    current_index = st.session_state.get("current_data_index")
+    row = get_row(current_index)
+    if row is None:
+        return
+
+    page_id = str(row.get("page_id"))
+    if page_id in st.session_state.get("bad_pages", set()):
+        return
+
+    page_row = {
+        "page_id": page_id,
+        "page_action": "bad_page",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+    }
+
+    append_jsonl(st.session_state["page_flags_path"], page_row)
+    refresh_state()
+
+    next_idx = find_next_visible_different_page(current_index)
+    st.session_state["current_data_index"] = next_idx
+
+
+def undo_current_bad_page():
+    current_index = st.session_state.get("current_data_index")
+    row = get_row(current_index)
+    if row is None:
+        return
+
+    page_id = str(row.get("page_id"))
+    page_rows = load_jsonl(st.session_state["page_flags_path"])
+
+    new_rows = []
+    removed = False
+    for item in page_rows:
+        if str(item.get("page_id")) == page_id and item.get("page_action") == "bad_page" and not removed:
+            removed = True
+            continue
+        new_rows.append(item)
+
+    if removed:
+        write_jsonl(st.session_state["page_flags_path"], new_rows)
+        refresh_state()
+
+
+def load_all(candidates_path: str, labels_path: str, page_flags_path: str, dataset_root: str):
+    candidates = load_jsonl(candidates_path)
 
     st.session_state["candidates_path"] = candidates_path
     st.session_state["labels_path"] = labels_path
+    st.session_state["page_flags_path"] = page_flags_path
     st.session_state["dataset_root"] = dataset_root
-    st.session_state["data"] = data
-    st.session_state["labels_lookup"] = labels_lookup
-    st.session_state["unlabeled_indices"] = unlabeled_indices
-    st.session_state["cursor"] = 0
+    st.session_state["data"] = candidates
+
+    refresh_state()
+
+    first_visible = find_first_visible()
+    st.session_state["current_data_index"] = first_visible if first_visible is not None else (0 if candidates else None)
+
+
+def get_page_candidate_indices(page_id):
+    data = st.session_state.get("data", [])
+    page_id = str(page_id)
+    return [i for i, row in enumerate(data) if str(row.get("page_id")) == page_id]
+
+
+def get_page_labeled_indices(page_id):
+    data = st.session_state.get("data", [])
+    labeled_lookup = st.session_state.get("labeled_lookup", {})
+    page_id = str(page_id)
+
+    result = []
+    for i, row in enumerate(data):
+        if str(row.get("page_id")) != page_id:
+            continue
+        key = make_candidate_key(row.get("page_id"), row.get("node_id"))
+        if key in labeled_lookup:
+            result.append(i)
+    return result
+
+
+def get_page_visible_indices(page_id):
+    data = st.session_state.get("data", [])
+    visible_indices = st.session_state.get("visible_indices", [])
+    page_id = str(page_id)
+
+    result = []
+    for i in visible_indices:
+        if str(data[i].get("page_id")) == page_id:
+            result.append(i)
+    return result
+
+
+def get_page_progress_info(current_data_index):
+    row = get_row(current_data_index)
+    if row is None:
+        return None
+
+    page_id = str(row.get("page_id"))
+    all_indices = get_page_candidate_indices(page_id)
+    labeled_indices = get_page_labeled_indices(page_id)
+    visible_indices = get_page_visible_indices(page_id)
+
+    current_pos_full = None
+    if all_indices:
+        current_pos_full = all_indices.index(current_data_index) + 1
+
+    current_pos_visible = None
+    if current_data_index in visible_indices:
+        current_pos_visible = visible_indices.index(current_data_index) + 1
+
+    return {
+        "page_id": page_id,
+        "total_on_page": len(all_indices),
+        "labeled_on_page": len(labeled_indices),
+        "remaining_on_page": len(visible_indices),
+        "current_pos_full": current_pos_full,
+        "current_pos_visible": current_pos_visible,
+    }
 
 
 st.title("AXTree Annotator")
 
 candidates_path = st.text_input("Path to candidates.jsonl", value=DEFAULT_CANDIDATES_PATH)
 labels_path = st.text_input("Path to labels.jsonl", value=DEFAULT_LABELS_PATH)
+page_flags_path = st.text_input("Path to page_flags.jsonl", value=DEFAULT_PAGE_FLAGS_PATH)
 dataset_root = st.text_input("Dataset root", value=DEFAULT_DATASET_ROOT)
 
 if st.button("Load", width="stretch"):
     try:
-        load_all(candidates_path, labels_path, dataset_root)
-        st.success("Loaded candidates and labels")
+        load_all(candidates_path, labels_path, page_flags_path, dataset_root)
+        st.success("Loaded candidates, labels, and page flags")
     except Exception as e:
         st.error(str(e))
 
 data = st.session_state.get("data", [])
-labels_lookup = st.session_state.get("labels_lookup", {})
-unlabeled_indices = st.session_state.get("unlabeled_indices", [])
 
 if data:
-    total_count = len(data)
-    labeled_count = len(labels_lookup)
-    remaining_count = len(unlabeled_indices)
+    labeled_lookup = st.session_state.get("labeled_lookup", {})
+    visible_indices = st.session_state.get("visible_indices", [])
+    bad_pages = st.session_state.get("bad_pages", set())
 
     st.write(
-        f"Total: **{total_count}** | "
-        f"Labeled: **{labeled_count}** | "
-        f"Remaining: **{remaining_count}**"
+        f"Total: **{len(data)}** | "
+        f"Labeled candidates: **{len(labeled_lookup)}** | "
+        f"Remaining candidates: **{len(visible_indices)}** | "
+        f"Bad pages: **{len(bad_pages)}**"
     )
 
-    if remaining_count == 0:
-        st.success("All candidates in this file are labeled.")
+    current_data_index = st.session_state.get("current_data_index")
+    row = get_row(current_data_index)
+
+    if row is None:
+        st.success("No current item.")
     else:
-        data_index, row = get_current_unlabeled_candidate()
-        cursor = st.session_state.get("cursor", 0)
+        page_info = get_page_progress_info(current_data_index)
 
         st.write(
-            f"Current unlabeled item: **{cursor + 1} / {remaining_count}** "
-            f"(data index = {data_index})"
+            f"Current data index: **{current_data_index}** | "
+            f"page_id: **{row.get('page_id')}** | "
+            f"node_id: **{row.get('node_id')}**"
         )
+
+        if page_info is not None:
+            st.write(
+                f"Page progress | "
+                f"Total on page: **{page_info['total_on_page']}** | "
+                f"Labeled on page: **{page_info['labeled_on_page']}** | "
+                f"Remaining on page: **{page_info['remaining_on_page']}**"
+            )
+            if page_info["current_pos_full"] is not None:
+                st.write(
+                    f"Current candidate on page (full order): "
+                    f"**{page_info['current_pos_full']} / {page_info['total_on_page']}**"
+                )
+            if page_info["current_pos_visible"] is not None:
+                st.write(
+                    f"Current candidate on page (remaining only): "
+                    f"**{page_info['current_pos_visible']} / {page_info['remaining_on_page']}**"
+                )
 
         screenshot_path = row.get("screenshot_path")
         bbox = row.get("bbox")
@@ -324,7 +530,7 @@ if data:
         try:
             if screenshot_path and bbox:
                 base_img = load_image(screenshot_path, st.session_state.get("dataset_root"))
-                component_key = f"{row.get('page_id')}_{row.get('node_id')}"
+                component_key = f"{row.get('page_id')}_{row.get('node_id')}_{current_data_index}"
                 html = make_scrollable_bbox_html(
                     base_img,
                     bbox,
@@ -338,42 +544,63 @@ if data:
         except Exception as e:
             st.error(str(e))
 
+        current_label = current_candidate_label()
+        is_page_bad = current_page_is_bad()
+
+        if current_label is not None:
+            st.info(f"Current label: **{current_label.get('label')}**")
+
+        if is_page_bad:
+            st.info("This page is marked as **bad_page**.")
+
         nav1, nav2, nav3, nav4, nav5, nav6 = st.columns(6)
 
         with nav1:
-            if st.button("Back", width="stretch"):
+            if st.button("Prev", width="stretch"):
                 go_prev()
                 st.rerun()
 
         with nav2:
-            if st.button("Junk", width="stretch"):
-                save_label("junk")
+            if st.button("Next", width="stretch"):
+                go_next()
                 st.rerun()
 
         with nav3:
-            if st.button("Not junk", width="stretch"):
-                save_label("not_junk")
+            if st.button("Junk", width="stretch", disabled=(current_label is not None or is_page_bad)):
+                save_candidate_label("junk")
                 st.rerun()
 
         with nav4:
-            if st.button("Bad candidate", width="stretch"):
-                save_label("bad_candidate")
+            if st.button("Not junk", width="stretch", disabled=(current_label is not None or is_page_bad)):
+                save_candidate_label("not_junk")
                 st.rerun()
 
         with nav5:
-            if st.button("Skip", width="stretch"):
-                save_label("skip")
+            if st.button("Skip", width="stretch", disabled=(current_label is not None or is_page_bad)):
+                save_candidate_label("skip")
                 st.rerun()
 
         with nav6:
-            if st.button("Reload labels", width="stretch"):
-                try:
-                    fresh_labels = load_labels(st.session_state["labels_path"])
-                    st.session_state["labels_lookup"] = labels_to_lookup(fresh_labels)
-                    refresh_unlabeled_indices()
-                    st.rerun()
-                except Exception as e:
-                    st.error(str(e))
+            if st.button("Bad page", width="stretch", disabled=is_page_bad):
+                mark_current_page_bad()
+                st.rerun()
+
+        undo1, undo2, reload_col = st.columns(3)
+
+        with undo1:
+            if st.button("Undo current label", width="stretch", disabled=(current_label is None)):
+                undo_current_label()
+                st.rerun()
+
+        with undo2:
+            if st.button("Undo bad page", width="stretch", disabled=(not is_page_bad)):
+                undo_current_bad_page()
+                st.rerun()
+
+        with reload_col:
+            if st.button("Reload", width="stretch"):
+                refresh_state()
+                st.rerun()
 
         st.markdown("---")
         st.markdown("**Metadata**")
@@ -389,7 +616,7 @@ if data:
             "text_subtree",
             value=row.get("text_subtree", ""),
             height=260,
-            key=f"text_subtree_{row.get('page_id')}_{row.get('node_id')}",
+            key=f"text_subtree_{row.get('page_id')}_{row.get('node_id')}_{current_data_index}",
         )
 
 else:

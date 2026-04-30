@@ -14,19 +14,20 @@ from widget_spec import Widget, WidgetType
 
 
 _CSS = """
-body { font-family: sans-serif; margin: 16px; line-height: 1.35; }
+body { font-family: sans-serif; margin: 16px; line-height: 1.35; background: #fff; }
+.page { max-width: 100%; margin: 0 auto; display: flex; justify-content: center; }
 .widget { border: 1px solid #ccc; border-radius: 4px; padding: 6px; margin: 4px;
           box-sizing: border-box; vertical-align: top; }
-.widget.block { display: block; background: #fafafa; }
+.widget.block { display: block; background: #fafafa; width: fit-content; max-width: 100%; }
 .widget.text  { display: block; background: #fff; border-color: #e0e0e0;
                 white-space: pre-wrap; overflow-wrap: anywhere; }
 .widget.link  { display: block; background: #eef5ff; border-color: #99c;
                 color: #225; text-decoration: none; }
 .widget.image { display: block; background: #f3fff3; border-color: #9c9; }
 .widget.main  { border-color: #d33; border-width: 2px; }
-.widget.vbox  { display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.widget.vbox  { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .widget.hbox  { display: flex; flex-direction: row; flex-wrap: wrap;
-                align-items: flex-start; gap: 4px; }
+                align-items: flex-start; justify-content: center; gap: 4px; }
 .widget.hbox > .widget { flex: 0 1 auto; }
 .widget .role { color: #888; font-size: 10px; margin-left: 6px; }
 .widget .name { font-weight: 600; margin-bottom: 4px; }
@@ -66,7 +67,7 @@ def render_document(w: Widget, title: str = "Widget tree") -> str:
     return (
         "<!doctype html>\n"
         f"<html><head><meta charset=\"utf-8\"><title>{escape(title)}</title>"
-        f"<style>{_CSS}</style></head><body>{body}</body></html>"
+        f"<style>{_CSS}</style></head><body><main class=\"page\">{body}</main></body></html>"
     )
 
 
