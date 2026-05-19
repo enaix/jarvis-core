@@ -27,6 +27,17 @@ class WidgetHint(StrEnum):
     VBOX = "vbox"
     HBOX = "hbox"
     MAIN = "main"
+    # Semantic hints promoted from text-wrapping AX roles by ax_to_widget.
+    # These preserve the "kind" of text (heading / emphasis / quote / etc.)
+    # that would otherwise be lost when a heading -> StaticText wrapper
+    # collapses into its child.
+    HEADING = "heading"
+    SUBHEADING = "subheading"
+    BOLD = "bold"
+    ITALIC = "italic"
+    QUOTE = "quote"
+    CAPTION = "caption"
+    TIME = "time"
 
 
 @dataclass
@@ -114,3 +125,39 @@ def role_to_leaf_type(role: str) -> Optional[WidgetType]:
 
 def role_is_container(role: str) -> bool:
     return role in CONTAINER_ROLES or role_to_leaf_type(role) is None
+
+
+# --- Text-role -> hint promotion ------------------------------------------
+#
+# When ax_to_widget collapses a text-wrapping role (heading -> StaticText,
+# strong -> StaticText, ...) into its child TEXT widget, the parent role
+# would otherwise be lost. We promote a curated subset of these roles to
+# semantic hints on the resulting widget. The mapping is intentionally
+# small to keep the hint vocabulary stable for downstream LLM training.
+#
+# Roles deliberately NOT mapped (kept as-is, lossy collapse):
+#   * paragraph, LineBreak  -- structural-only, no useful semantic
+#   * code, Pre, kbd, samp, var, mark, cite, q, dfn, insertion, deletion,
+#     subscript, superscript, Abbr  -- usage in real data not yet verified
+#
+# heading uses aria-level: level 1 -> HEADING, level >= 2 -> SUBHEADING.
+# Missing level defaults to HEADING.
+
+def text_role_to_hints(role: str, level: Optional[int] = None) -> list[WidgetHint]:
+    """Return the WidgetHints to apply when collapsing a text-wrapper role
+    into its child TEXT widget."""
+    if role == "heading":
+        if level is not None and level >= 2:
+            return [WidgetHint.SUBHEADING]
+        return [WidgetHint.HEADING]
+    if role == "strong":
+        return [WidgetHint.BOLD]
+    if role == "emphasis":
+        return [WidgetHint.ITALIC]
+    if role == "blockquote":
+        return [WidgetHint.QUOTE]
+    if role in ("caption", "Figcaption", "LabelText"):
+        return [WidgetHint.CAPTION]
+    if role == "time":
+        return [WidgetHint.TIME]
+    return []

@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
+from collections import defaultdict
 from dataclasses import dataclass
+from html import unescape
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -280,3 +283,399 @@ def assert_mapping_quality(
             + "\n".join([f"- backendDOMNodeId={k}: {v.get('ax_name')} -> {v.get('href')} | {v.get('_fails')}"
                          for k, v in examples])
         )
+
+
+# ---------------------------------------------------------------------------
+# v2 mapping (ported from notebooks/webui/loader.ipynb).
+#
+# Differences vs map_axtree_links_to_html_hrefs:
+#   * Detects a link node via role.value OR properties[*].name in
+#     {"role", "aria-role", "aria_role"} with value "link".
+#   * Pulls anchor text from visible text, aria-label, title, aria-labelledby,
+#     then <img> alt/aria-label/title.
+#   * Resolves and normalizes hrefs (urljoin + small fixup table).
+#   * Instead of a blind greedy first-unused assignment, classifies each match
+#     into a category and only fills `href` when the match is unambiguous.
+#
+# Operates on a SINGLE page. Returns the mapping itself (not statistics).
+# ---------------------------------------------------------------------------
+
+
+def _unwrap_stringish(x: Any) -> str:
+    """Pull a string out of nested AX-style values: str / {"value": ...} / list."""
+    if x is None:
+        return ""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        if "value" in x:
+            return _unwrap_stringish(x["value"])
+        for k in ("name", "text", "label"):
+            if k in x:
+                return _unwrap_stringish(x[k])
+        return ""
+    if isinstance(x, list):
+        for it in x:
+            s = _unwrap_stringish(it)
+            if s:
+                return s
+        return ""
+    return str(x)
+
+
+# Zero-width / invisible characters frequently leak through HTML copy-paste
+# (zero-width space, ZWNJ, ZWJ, word joiner, BOM). They survive whitespace
+# collapsing because Python's \s does not include them.
+_ZERO_WIDTH_RE = re.compile(r"[​‌‍⁠﻿]")
+
+
+def _normalize_ax_text(x: Any) -> str:
+    """Unwrap + HTML-unescape + Unicode-normalize + collapse whitespace.
+
+    Pipeline:
+      1. Unwrap nested AX-style values to a string.
+      2. HTML-unescape (`&amp;` -> `&`, `&nbsp;` -> NBSP, etc.).
+      3. NFKC: fold compatibility variants — full-width digits/latin, ligatures,
+         some non-breaking spaces (e.g. NARROW NO-BREAK SPACE U+202F),
+         superscripts, etc. — to their canonical ASCII counterparts where one
+         exists. AX text and visible anchor text often differ only in such
+         variants; without this they match as different strings.
+      4. Strip zero-width / invisible markers that survive \\s collapsing.
+      5. NBSP (U+00A0) -> regular space. NFKC does NOT decompose plain NBSP,
+         so this has to be explicit.
+      6. Strip + collapse whitespace runs.
+
+    NOTE: case-sensitive on purpose, matching loader.ipynb. AX names and visible
+    anchor text are usually authored together, so casefold mostly hides bugs.
+    """
+    s = _unwrap_stringish(x)
+    s = unescape(s or "")
+    s = unicodedata.normalize("NFKC", s)
+    s = _ZERO_WIDTH_RE.sub("", s)
+    s = s.replace("\xa0", " ")
+    s = s.strip()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+# Schemes that are not real navigational destinations. These are dropped from
+# anchor_items so they can't accidentally match an AX link node — there is no
+# "page" on the other side to point at, only a side-effect (script execution,
+# inline blob, raw data). `mailto:`, `tel:`, `sms:` are intentionally NOT in
+# this list — they are valid destinations for activation, just not pages.
+_NON_NAV_SCHEMES = ("javascript:", "data:", "blob:", "about:")
+
+
+def _normalize_url_v2(u: str) -> str:
+    """Bring URL to a stable form so equal destinations match as equal strings.
+
+    Steps:
+      * Drop empty / `javascript:` / `data:` / `blob:` / `about:` (no page).
+      * Apply small site-specific fixup table (extend as needed).
+      * Lowercase scheme and host, leave path / query / fragment untouched
+        (case-significant per RFC 3986 §6.2.2.1).
+      * Drop default port (`:80` for http, `:443` for https).
+
+    Returns "" for URLs that should not participate in matching at all.
+    """
+    u = (u or "").strip()
+    if not u:
+        return ""
+    low = u.lower()
+    if low.startswith(_NON_NAV_SCHEMES):
+        return ""
+
+    # Known site-specific fixups
+    u = u.replace("https://libera.chat#", "https://libera.chat/#")
+
+    # Lowercase scheme + host; drop default port
+    p = urlsplit(u)
+    if p.scheme:
+        scheme = p.scheme.lower()
+        host = (p.hostname or "").lower()
+        port = p.port
+        if (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+            port = None
+        userinfo = ""
+        if p.username is not None:
+            userinfo = p.username
+            if p.password is not None:
+                userinfo += ":" + p.password
+            userinfo += "@"
+        netloc = userinfo + host + (f":{port}" if port is not None else "")
+        u = urlunsplit((scheme, netloc, p.path, p.query, p.fragment))
+    return u
+
+
+def _anchor_name_v2(a_tag, id_text: Dict[str, str]) -> str:
+    """Pick the first non-empty name from: visible text, aria-label, title,
+    aria-labelledby, <img> alt/aria-label/title."""
+    for c in (
+        a_tag.get_text(" ", strip=True),
+        a_tag.get("aria-label"),
+        a_tag.get("title"),
+    ):
+        t = _normalize_ax_text(c)
+        if t:
+            return t
+
+    aria_labelledby = a_tag.get("aria-labelledby")
+    if aria_labelledby:
+        parts: List[str] = []
+        for _id in str(aria_labelledby).split():
+            if _id in id_text:
+                parts.append(id_text[_id])
+        if parts:
+            t = _normalize_ax_text(" ".join(parts))
+            if t:
+                return t
+
+    img = a_tag.find("img")
+    if img:
+        for c in (img.get("alt"), img.get("aria-label"), img.get("title")):
+            t = _normalize_ax_text(c)
+            if t:
+                return t
+
+    return ""
+
+
+def _node_is_link_v2(n: Dict[str, Any]) -> bool:
+    """role.value == 'link' OR properties[*] with name in
+    {role, aria-role, aria_role} and value 'link'."""
+    role = n.get("role")
+    role_val = (
+        _normalize_ax_text(role.get("value")) if isinstance(role, dict)
+        else _normalize_ax_text(role)
+    )
+    if role_val.lower() == "link":
+        return True
+
+    props = n.get("properties")
+    if isinstance(props, list):
+        for p in props:
+            if not isinstance(p, dict):
+                continue
+            if p.get("name") in ("role", "aria-role", "aria_role"):
+                if _normalize_ax_text(p.get("value")).lower() == "link":
+                    return True
+    return False
+
+
+def _node_text_v2(n: Dict[str, Any]) -> str:
+    for c in (n.get("name"), n.get("accessibleName"), n.get("text"), n.get("value")):
+        t = _normalize_ax_text(c)
+        if t:
+            return t
+    return ""
+
+
+def map_axtree_links_to_html_hrefs_v2(
+    axtree: AXTreeInput,
+    html: str,
+    base_url: Optional[str] = None,
+    parser: str = "html.parser",
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Map AXTree link nodes to HTML <a href=...> for a SINGLE page, using the
+    richer logic ported from notebooks/webui/loader.ipynb.
+
+    Returns: backendDOMNodeId -> {
+        nodeId:            str,
+        ax_name:           str,            # raw AX name (unwrapped, not normalized)
+        ax_text:           str,            # normalized text used as match key
+        href:              str,            # filled only when the match is safe
+        candidate_hrefs:   List[str],      # all hrefs whose anchors share this text
+        matched_html_name: Optional[str],  # the anchor text actually matched on
+        category:          str,
+            # safe_1to1         - 1 node, 1 unique href             (href filled)
+            # safe_multiple     - K>1 nodes, 1 href, anchors >= K   (href filled)
+            # indistinguishable - K nodes, K anchors, multiple hrefs (href empty)
+            # all_other         - same text -> multiple hrefs, counts not aligned
+            # only_in_nodes     - text not present in any usable anchor
+            # no_text           - link node had no text at all
+        node_count:        int,            # AX link nodes sharing this text
+        anchor_count:      int,            # HTML anchors sharing this text
+    }
+
+    Anchors without text or href are dropped from consideration. AX link nodes
+    without backendDOMNodeId are also dropped (they cannot be keyed).
+    """
+    soup = BeautifulSoup(html, parser)
+    id_text = _build_id_text_map(soup)
+
+    # --- HTML side: anchors with text AND href ---
+    anchor_items: List[Dict[str, Any]] = []
+    for i, a in enumerate(soup.find_all("a")):
+        text = _anchor_name_v2(a, id_text)
+        if not text:
+            continue
+        href_attr = a.get("href")
+        href_raw = "" if href_attr is None else str(href_attr).strip()
+        if not href_raw:
+            continue
+        href = _normalize_url_v2(urljoin(base_url, href_raw) if base_url else href_raw)
+        if not href:
+            continue
+        anchor_items.append({"i": i, "text": text, "href": href})
+
+    # --- AX side: link nodes (split into "with text" and "no text") ---
+    nodes_raw = _get_axtree_nodes(axtree)
+    link_node_items: List[Dict[str, Any]] = []
+    no_text_nodes: List[Dict[str, Any]] = []
+
+    for j, n in enumerate(nodes_raw):
+        if not _node_is_link_v2(n):
+            continue
+        backend_id = n.get("backendDOMNodeId")
+        if backend_id is None:
+            continue
+        rec = {
+            "j": j,
+            "backend_id": int(backend_id),
+            "node_id": str(n.get("nodeId")),
+            "ax_name": _unwrap_stringish(n.get("name")),
+            "text": _node_text_v2(n),
+        }
+        (link_node_items if rec["text"] else no_text_nodes).append(rec)
+
+    # --- Indices ---
+    anchors_by_text_href: Dict[str, Dict[str, List[Dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for it in anchor_items:
+        anchors_by_text_href[it["text"]][it["href"]].append(it)
+
+    nodes_by_text: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for it in link_node_items:
+        nodes_by_text[it["text"]].append(it)
+
+    # --- Build mapping ---
+    out: Dict[int, Dict[str, Any]] = {}
+
+    for text, n_list in nodes_by_text.items():
+        href_map = anchors_by_text_href.get(text, {})
+        nodes_count = len(n_list)
+        unique_hrefs_count = len(href_map)
+        anchors_count = sum(len(lst) for lst in href_map.values())
+        candidate_hrefs = sorted(href_map.keys())
+
+        if unique_hrefs_count == 0:
+            category = "only_in_nodes"
+            href = ""
+            matched_html_name: Optional[str] = None
+        elif nodes_count == 1 and unique_hrefs_count == 1:
+            category = "safe_1to1"
+            href = candidate_hrefs[0]
+            matched_html_name = text
+        elif nodes_count > 1 and unique_hrefs_count == 1 and anchors_count >= nodes_count:
+            category = "safe_multiple"
+            href = candidate_hrefs[0]
+            matched_html_name = text
+        elif nodes_count > 1 and anchors_count == nodes_count and unique_hrefs_count > 1:
+            category = "indistinguishable"
+            href = ""
+            matched_html_name = text
+        else:
+            category = "all_other"
+            href = ""
+            matched_html_name = text
+
+        for n in n_list:
+            out[n["backend_id"]] = {
+                "nodeId": n["node_id"],
+                "ax_name": n["ax_name"],
+                "ax_text": text,
+                "href": href,
+                "candidate_hrefs": list(candidate_hrefs),
+                "matched_html_name": matched_html_name,
+                "category": category,
+                "node_count": nodes_count,
+                "anchor_count": anchors_count,
+            }
+
+    for n in no_text_nodes:
+        out[n["backend_id"]] = {
+            "nodeId": n["node_id"],
+            "ax_name": n["ax_name"],
+            "ax_text": "",
+            "href": "",
+            "candidate_hrefs": [],
+            "matched_html_name": None,
+            "category": "no_text",
+            "node_count": 1,
+            "anchor_count": 0,
+        }
+
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Apply v2 mapping back into a cleaned AXTree, replacing the visible name of
+# each link-role node with the resolved href (or a fallback marker when the
+# match is not safe). Used by the AXTree -> Widget conversion pipeline so
+# that LINK widgets carry the URL instead of the visible anchor text.
+# ---------------------------------------------------------------------------
+
+
+def apply_link_hrefs_to_tree(
+    tree: Dict[str, Any],
+    mapping: Dict[int, Dict[str, Any]],
+    fallback: str = "[LINK]",
+    save_original_as: Optional[str] = "orig_name",
+    link_roles: Optional[set] = None,
+) -> Dict[str, int]:
+    """Mutate `tree` in place, rewriting `name` of every link-role node so it
+    carries the resolved href URL. Visible text stays preserved as the link's
+    tree children (StaticText etc.) and -- if `save_original_as` is set -- a
+    backup of the pre-substitution name.
+
+    Expected node shape (as produced by build_tree / transform_tree in the
+    notebook): {"id", "back_id", "ignored", "name": str, "role": str,
+    "modified": bool, "children": [...]}.
+
+    Substitution rule: if `mapping[node["back_id"]]` exists with category
+    in {"safe_1to1", "safe_multiple"} AND a non-empty href, the node's
+    `name` becomes that URL. Otherwise (no entry, ambiguous category, or
+    empty href) the `name` becomes `fallback` (default "[LINK]").
+
+    The original name is preserved under `save_original_as` (default
+    "orig_name") if that key isn't already present on the node. Pass
+    `save_original_as=None` to skip preservation.
+
+    `link_roles` defaults to {"link"}. Override if your AXTree uses extra
+    link-like role names (e.g., "MenuItemLink").
+
+    Returns a counters dict useful for logging:
+      {"with_href": N, "with_fallback": M, "total_link_nodes": N+M}.
+    """
+    if link_roles is None:
+        link_roles = {"link"}
+    safe_categories = {"safe_1to1", "safe_multiple"}
+    counters = {"with_href": 0, "with_fallback": 0, "total_link_nodes": 0}
+
+    def walk(node: Any) -> None:
+        if not isinstance(node, dict):
+            return
+        if node.get("role") in link_roles:
+            counters["total_link_nodes"] += 1
+            back_id = node.get("back_id")
+            entry = mapping.get(back_id) if back_id is not None else None
+            if (
+                entry
+                and entry.get("category") in safe_categories
+                and entry.get("href")
+            ):
+                new_name = entry["href"]
+                counters["with_href"] += 1
+            else:
+                new_name = fallback
+                counters["with_fallback"] += 1
+            if save_original_as and save_original_as not in node:
+                node[save_original_as] = node.get("name", "")
+            node["name"] = new_name
+        for child in node.get("children", []):
+            walk(child)
+
+    walk(tree)
+    return counters

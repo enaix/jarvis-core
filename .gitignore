@@ -452,3 +452,46 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+
+
+
+# Notebook-generated intermediate results
+# =======================================
+# These directories are populated automatically by the notebooks
+# (loader.ipynb, annotator, renderer). Outputs are reproducible from
+# the source data, so we don't track them in the repo.
+
+notebooks/webui/output/
+notebooks/webui/renderer_output/
+notebooks/webui/annotator/output/
+notebooks/webui/annotator/candidates_topic_filtered.jsonl
+
+# Root-level webui dataset (downloaded data, not source code)
+/webui/
+
+# Filtering training pipeline — large derivatives
+# ===============================================
+# Feature matrices and vectorizers are regenerated from training/data/
+# label JSONs via prepare_data.py + extract_features.py.
+notebooks/webui/training/data/*.npz
+notebooks/webui/training/data/*.pkl
+notebooks/webui/training/data/data_summary.json
+notebooks/webui/training/data/feature_meta.json
+notebooks/webui/training/figures/
+
+# Zero-/few-shot eval — debug artifacts
+# =====================================
+# metrics.jsonl and manual_ratings.csv are kept; everything else is
+# either raw LLM output, intermediate parsing state, or charts that
+# already appear in the thesis PDF.
+notebooks/webui/zs_fs_eval/outputs/charts/
+notebooks/webui/zs_fs_eval/outputs/renders/
+notebooks/webui/zs_fs_eval/outputs/raw_outputs.jsonl
+notebooks/webui/zs_fs_eval/outputs/intermediate_text.jsonl
+notebooks/webui/zs_fs_eval/outputs/analysis.json
+notebooks/webui/zs_fs_eval/outputs/results.md
+notebooks/webui/zs_fs_eval/outputs/results_with_interpretations.md
+
+# Archived prompt variants kept locally for reference only
+notebooks/webui/zs_fs_eval/prompts/old/

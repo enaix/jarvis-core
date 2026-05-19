@@ -31,6 +31,18 @@ body { font-family: sans-serif; margin: 16px; line-height: 1.35; background: #ff
 .widget.hbox > .widget { flex: 0 1 auto; }
 .widget .role { color: #888; font-size: 10px; margin-left: 6px; }
 .widget .name { font-weight: 600; margin-bottom: 4px; }
+
+/* --- Semantic text hints (promoted from text-wrapping AX roles) --- */
+.widget.heading    { font-size: 1.6em; font-weight: 700; line-height: 1.2; }
+.widget.subheading { font-size: 1.25em; font-weight: 600; line-height: 1.25; }
+.widget.bold       { font-weight: 700; }
+.widget.italic     { font-style: italic; }
+.widget.quote      { border-left: 4px solid #aaa; padding-left: 12px;
+                     color: #555; font-style: italic; }
+.widget.caption    { font-size: 0.85em; color: #555; }
+.widget.time       { font-family: ui-monospace, "SFMono-Regular", Menlo,
+                                  Consolas, monospace;
+                     color: #444; }
 """
 
 
@@ -52,8 +64,40 @@ def render_widget(w: Widget) -> str:
         return f'<div class="{cls}" title="{alt}">[image: {alt}]{role}</div>'
 
     if w.type == WidgetType.LINK:
-        inner = name + "".join(render_widget(c) for c in w.children)
-        return f'<a class="{cls}" href="#">{inner}{role}</a>'
+        # Convention from apply_link_hrefs_to_tree: for LINK widgets, `name`
+        # carries the resolved URL (or the "[LINK]" placeholder when the
+        # match was unsafe). Visible content lives in the link's children.
+        href = escape(w.name) if w.name else "#"
+
+        # Empty link: only accessible name available, show it as the label.
+        if not w.children:
+            label = escape(w.name) if w.name else "[link]"
+            return f'<a class="{cls}" href="{href}">{label}{role}</a>'
+
+        # Presentation collapse: if every child is a leaf (TEXT or IMAGE),
+        # flatten the link contents into a single <a> with text and image
+        # placeholders concatenated by spaces. Covers:
+        #   - one or many TEXT chunks ("Download for" + "Linux")
+        #   - one or many IMAGE leaves (social-icon rows)
+        #   - mixed icon + label patterns (<a><img> Label</a>)
+        # Card-style links with non-leaf children (heading, paragraph, block)
+        # stay rendered nested so visual structure is preserved.
+        if all(c.type in (WidgetType.TEXT, WidgetType.IMAGE) for c in w.children):
+            parts: list[str] = []
+            for c in w.children:
+                if c.type == WidgetType.TEXT:
+                    if c.name:
+                        parts.append(escape(c.name))
+                else:  # IMAGE
+                    alt = (c.name or "").strip()
+                    parts.append(f'[image: {escape(alt)}]' if alt else '[image]')
+            inner = " ".join(parts) if parts else (escape(w.name) if w.name else "[link]")
+            return f'<a class="{cls}" href="{href}">{inner}{role}</a>'
+
+        # Mixed / complex children (heading, block, list inside a card-link)
+        # -> keep nested rendering so structure is visible.
+        inner = "".join(render_widget(c) for c in w.children)
+        return f'<a class="{cls}" href="{href}">{inner}{role}</a>'
 
     # BLOCK
     header = f'<div class="name">{name}</div>' if name else ""

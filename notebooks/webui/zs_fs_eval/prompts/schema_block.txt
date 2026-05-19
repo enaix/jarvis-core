@@ -1,0 +1,27 @@
+A widget tree is a JSON object. Each node has exactly these fields:
+  { "type": <text|block|link|image>,
+    "hints": [<hint>, ...],
+    "name": <string>,
+    "children": [<node>, ...] }
+
+type:
+  text  - leaf text. children MUST be []. name = the text.
+  image - leaf image. children MUST be []. name = alt text.
+  link  - hyperlink. name = URL. children = visible content (text/image).
+  block - container. children = nested nodes. name = optional label ("" if none).
+
+hints (array of strings, may be empty []). Each item must be EXACTLY one of
+these 10 literal values, written as a bare word - never prefixed:
+  main, vbox, hbox, heading, subheading, bold, italic, quote, caption, time
+  (write "main" and "heading" - NOT "layout:main", NOT "text:heading")
+
+  meaning: main = primary content region (~once per tree); vbox = stack
+  children vertically; hbox = children in a row; heading / subheading =
+  heading text; bold / italic / quote / caption / time = text styling.
+
+Rules:
+  - exactly one root node
+  - text and image are always leaves (children = [])
+  - hints is a set, serialized sorted; use [] when none
+  - all four fields are always present
+  - output ONLY the JSON object - no prose, no markdown fences

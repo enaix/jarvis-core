@@ -1,0 +1,25 @@
+{"id": "q01", "question": "What laptop should I buy for under $1500 for university?", "domain": "recommendation"}
+{"id": "q02", "question": "What are the best noise-cancelling headphones in 2026?", "domain": "recommendation"}
+{"id": "q03", "question": "Which standing desk is worth buying for a home office?", "domain": "recommendation"}
+{"id": "q04", "question": "What board games are good for families with young children?", "domain": "recommendation"}
+{"id": "q05", "question": "What should I look for when buying a used car?", "domain": "recommendation"}
+{"id": "q06", "question": "Why does the aurora borealis happen?", "domain": "explanatory"}
+{"id": "q07", "question": "Why is the sky blue?", "domain": "explanatory"}
+{"id": "q08", "question": "How do vaccines work?", "domain": "explanatory"}
+{"id": "q09", "question": "What causes ocean tides?", "domain": "explanatory"}
+{"id": "q10", "question": "Why do leaves change color in autumn?", "domain": "explanatory"}
+{"id": "q11", "question": "How do I change a flat bicycle tire?", "domain": "how-to"}
+{"id": "q12", "question": "How do I start composting at home?", "domain": "how-to"}
+{"id": "q13", "question": "How do I set up a personal budget for the first time?", "domain": "how-to"}
+{"id": "q14", "question": "How do I repot a houseplant without damaging it?", "domain": "how-to"}
+{"id": "q15", "question": "What is the difference between a virus and bacteria?", "domain": "comparison"}
+{"id": "q16", "question": "Should I rent or buy a home?", "domain": "comparison"}
+{"id": "q17", "question": "What is the difference between machine learning and deep learning?", "domain": "comparison"}
+{"id": "q18", "question": "Espresso versus drip coffee, what is the difference?", "domain": "comparison"}
+{"id": "q19", "question": "What are the most visited national parks in the United States?", "domain": "list"}
+{"id": "q20", "question": "What are some good habits for better sleep?", "domain": "list"}
+{"id": "q21", "question": "What houseplants are hard to kill?", "domain": "list"}
+{"id": "q22", "question": "How does the process of applying for a passport work?", "domain": "process"}
+{"id": "q23", "question": "What are the steps to publish a mobile app?", "domain": "process"}
+{"id": "q24", "question": "What is compound interest and why does it matter?", "domain": "concept"}
+{"id": "q25", "question": "What is the difference between weather and climate?", "domain": "concept"}

@@ -4,3 +4,5 @@ pillow
 matplotlib
 huggingface-hub
 opencv-python
+beautifulsoup4
+lxml

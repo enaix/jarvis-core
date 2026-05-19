@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "widget_schema.json",
+  "title": "Widget tree (generation format v0)",
+  "description": "Validation schema for LLM-generated widget trees. See widget_format_spec.md. Strip node_id/back_id/role before validating.",
+  "$ref": "#/$defs/widget",
+  "$defs": {
+    "widget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "hints", "name", "children"],
+      "properties": {
+        "type": {
+          "enum": ["text", "block", "link", "image"]
+        },
+        "hints": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "main", "vbox", "hbox",
+              "heading", "subheading", "bold", "italic",
+              "quote", "caption", "time"
+            ]
+          }
+        },
+        "name": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/widget" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "enum": ["text", "image"] } }
+          },
+          "then": {
+            "properties": { "children": { "maxItems": 0 } }
+          }
+        }
+      ]
+    }
+  }
+}

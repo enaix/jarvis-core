@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 from datetime import datetime
@@ -11,10 +12,32 @@ from PIL import Image
 st.set_page_config(page_title="AXTree Annotator", layout="wide")
 
 
-DEFAULT_CANDIDATES_PATH = r"notebooks\webui\output\candidate\candidates.jsonl"
+DEFAULT_CANDIDATES_PATH = r"notebooks\webui\annotator\candidates_topic_filtered.jsonl"
 DEFAULT_LABELS_PATH = r"notebooks\webui\annotator\output\labels.jsonl"
 DEFAULT_PAGE_FLAGS_PATH = r"notebooks\webui\annotator\output\page_flags.jsonl"
 DEFAULT_DATASET_ROOT = r"C:\Users\70133\.cache\huggingface\hub\datasets--biglab--webui-7k\snapshots\60f7b3c4b9409f75551664adc1564625dfc33c2e\dataset1"
+GENERATOR_SOURCE_PATH = Path(__file__).resolve().parent.parent / "build_candidates.py"
+
+SUB_LABELS = ["cookie", "footer", "sidebar", "nav", "social", "legal", "ad", "recurring", "other"]
+DEFAULT_SUB_LABEL = "other"
+
+
+def compute_generator_version() -> str:
+    """md5 от build_candidates.py — меняется когда меняется логика генератора."""
+    try:
+        with GENERATOR_SOURCE_PATH.open("rb") as f:
+            return hashlib.md5(f.read()).hexdigest()[:12]
+    except FileNotFoundError:
+        return "unknown"
+
+
+def compute_content_hash(role, text_subtree) -> str:
+    """md5 от role + text_subtree — стабильный ID кандидата при смене генератора."""
+    payload = f"{role or ''}::{text_subtree or ''}".encode("utf-8")
+    return hashlib.md5(payload).hexdigest()[:16]
+
+
+GENERATOR_VERSION = compute_generator_version()
 
 
 def load_jsonl(path: str):
@@ -290,7 +313,7 @@ def current_page_is_bad():
     return str(row.get("page_id")) in st.session_state.get("bad_pages", set())
 
 
-def save_candidate_label(label_value: str):
+def save_candidate_label(label_value: str, sub_label: str = ""):
     current_index = st.session_state.get("current_data_index")
     row = get_row(current_index)
     if row is None:
@@ -304,6 +327,9 @@ def save_candidate_label(label_value: str):
         "page_id": str(row.get("page_id")),
         "node_id": str(row.get("node_id")),
         "label": label_value,
+        "sub_label": sub_label if label_value == "junk" else "",
+        "content_hash": compute_content_hash(row.get("role"), row.get("text_subtree", "")),
+        "generator_version": GENERATOR_VERSION,
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "role": row.get("role"),
         "text_len": row.get("text_len"),
@@ -466,17 +492,18 @@ def get_page_progress_info(current_data_index):
 
 st.title("AXTree Annotator")
 
-candidates_path = st.text_input("Path to candidates.jsonl", value=DEFAULT_CANDIDATES_PATH)
-labels_path = st.text_input("Path to labels.jsonl", value=DEFAULT_LABELS_PATH)
-page_flags_path = st.text_input("Path to page_flags.jsonl", value=DEFAULT_PAGE_FLAGS_PATH)
-dataset_root = st.text_input("Dataset root", value=DEFAULT_DATASET_ROOT)
+with st.expander("Paths (click to expand)", expanded=("data" not in st.session_state)):
+    candidates_path = st.text_input("Path to candidates.jsonl", value=DEFAULT_CANDIDATES_PATH)
+    labels_path = st.text_input("Path to labels.jsonl", value=DEFAULT_LABELS_PATH)
+    page_flags_path = st.text_input("Path to page_flags.jsonl", value=DEFAULT_PAGE_FLAGS_PATH)
+    dataset_root = st.text_input("Dataset root", value=DEFAULT_DATASET_ROOT)
 
-if st.button("Load", width="stretch"):
-    try:
-        load_all(candidates_path, labels_path, page_flags_path, dataset_root)
-        st.success("Loaded candidates, labels, and page flags")
-    except Exception as e:
-        st.error(str(e))
+    if st.button("Load", width="stretch"):
+        try:
+            load_all(candidates_path, labels_path, page_flags_path, dataset_root)
+            st.success("Loaded candidates, labels, and page flags")
+        except Exception as e:
+            st.error(str(e))
 
 data = st.session_state.get("data", [])
 
@@ -491,6 +518,7 @@ if data:
         f"Remaining candidates: **{len(visible_indices)}** | "
         f"Bad pages: **{len(bad_pages)}**"
     )
+    st.caption(f"Generator version: `{GENERATOR_VERSION}`")
 
     current_data_index = st.session_state.get("current_data_index")
     row = get_row(current_data_index)
@@ -535,10 +563,10 @@ if data:
                     base_img,
                     bbox,
                     component_key=component_key,
-                    container_height=780,
+                    container_height=550,
                     top_margin=20,
                 )
-                st.components.v1.html(html, height=800, scrolling=False)
+                st.components.v1.html(html, height=570, scrolling=False)
             else:
                 st.warning("This row has no screenshot_path or bbox")
         except Exception as e:
@@ -548,10 +576,24 @@ if data:
         is_page_bad = current_page_is_bad()
 
         if current_label is not None:
-            st.info(f"Current label: **{current_label.get('label')}**")
+            label_str = current_label.get("label", "")
+            sub_str = current_label.get("sub_label", "")
+            if label_str == "junk" and sub_str:
+                st.info(f"Current label: **{label_str} / {sub_str}**")
+            else:
+                st.info(f"Current label: **{label_str}**")
 
         if is_page_bad:
             st.info("This page is marked as **bad_page**.")
+
+        sub_label = st.radio(
+            "Sub-label (для Junk)",
+            options=SUB_LABELS,
+            index=SUB_LABELS.index(DEFAULT_SUB_LABEL),
+            horizontal=True,
+            key="sub_label_radio",
+            disabled=(current_label is not None or is_page_bad),
+        )
 
         nav1, nav2, nav3, nav4, nav5, nav6 = st.columns(6)
 
@@ -567,7 +609,7 @@ if data:
 
         with nav3:
             if st.button("Junk", width="stretch", disabled=(current_label is not None or is_page_bad)):
-                save_candidate_label("junk")
+                save_candidate_label("junk", sub_label=sub_label)
                 st.rerun()
 
         with nav4:
@@ -603,6 +645,31 @@ if data:
                 st.rerun()
 
         st.markdown("---")
+
+        # Global recurrence (по всему WebUI 5420 pages) — основной сигнал
+        grec = row.get("global_recurrence_count")
+        gratio = row.get("global_recurrence_ratio")
+        # Local recurrence (по нашим 201 corpus pages) — supplementary
+        lrec = row.get("recurrence_count")
+
+        if grec is not None:
+            ratio_str = f"{gratio*100:.2f}%" if gratio is not None else ""
+            if grec >= 10:
+                st.warning(
+                    f"**Global recurrence: {grec} pages ({ratio_str})** — almost certainly junk (cross-site boilerplate)"
+                )
+            elif grec >= 5:
+                st.warning(
+                    f"**Global recurrence: {grec} pages ({ratio_str})** — likely junk (recurring across sites)"
+                )
+            elif grec >= 2:
+                st.info(f"Global recurrence: {grec} pages ({ratio_str})")
+            else:
+                st.caption(f"Global recurrence: {grec or 1} page (unique block in WebUI)")
+
+        if lrec is not None and lrec >= 2:
+            st.caption(f"Local recurrence (in our 201-page corpus): {lrec} pages")
+
         st.markdown("**Metadata**")
         st.write(f"page_id: {row.get('page_id')}")
         st.write(f"node_id: {row.get('node_id')}")

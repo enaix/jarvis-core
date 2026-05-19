@@ -1,0 +1,68 @@
+A Chrome DevTools Protocol AXTree dump is a JSON object with a "nodes" key
+containing a FLAT ARRAY of node objects. Tree structure is encoded via
+parentId / childIds references between nodes - the nodes themselves are NOT
+nested.
+
+Top-level shape:
+  { "nodes": [ <node 1>, <node 2>, ... ] }
+
+Each node has this exact structure:
+  {
+    "nodeId": "<unique string id>",
+    "role": { "type": "internalRole" | "role", "value": "<role name>" },
+    "name": { "type": "computedString", "value": "<accessible name>" },
+    "properties": [
+      { "name": "level", "value": { "type": "integer", "value": <int> } },
+      ...
+    ],
+    "childIds": [ "<child node id>", ... ],
+    "parentId": "<parent node id>"
+  }
+
+Notes:
+  - The root node uses role.value = "RootWebArea" and has NO parentId
+  - role.type is "internalRole" for Chrome-specific roles like RootWebArea,
+    LayoutTable, MenuListPopup; "role" for standard ARIA roles
+  - name is a typed-object even for simple text (always wrap in {type, value})
+  - "level" for headings goes inside the properties array, not as a top-level
+    field
+  - For "link" nodes, name.value holds the URL; the visible label goes in a
+    child "StaticText" node
+  - "image" / "img" nodes use name.value for alt text
+  - Use sequential nodeId strings: "1", "2", "3", ...
+  - childIds and parentId reference these string ids
+
+Available roles (use any from your training-data knowledge of Chrome AXTree
+and ARIA; the canonical taxonomy is given here):
+
+  Landmark / structural :
+    RootWebArea, main, navigation, banner, contentinfo, complementary,
+    region, search, form, article, Section, group, generic, none
+
+  Headings and text :
+    heading, paragraph, StaticText, LineBreak, blockquote, Pre, emphasis,
+    strong, LabelText, Abbr, time, ListMarker, superscript, insertion,
+    Legend, Figcaption
+
+  Lists :
+    list, listitem, DescriptionList, DescriptionListTerm, DescriptionListDetail
+
+  Tables :
+    table, row, gridcell, columnheader, rowheader, grid,
+    LayoutTable, LayoutTableRow, LayoutTableCell
+
+  Tabs / menus / dialogs :
+    tablist, tab, tabpanel, menu, menubar, menuitem, MenuListPopup,
+    dialog, alertdialog
+
+  Form controls :
+    button, checkbox, switch, textbox, searchbox, combobox, listbox,
+    option, spinbutton
+
+  Other :
+    HeaderAsNonLandmark, FooterAsNonLandmark, Details, DisclosureTriangle,
+    separator, status, link, img, image, figure, Video, Iframe,
+    IframePresentational, PluginObject
+
+Output ONLY the JSON object (the wrapper containing the "nodes" array). No
+prose, no markdown fences.
